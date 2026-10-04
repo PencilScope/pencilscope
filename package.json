@@ -14,7 +14,6 @@
     "build:production": "node scripts/cloudflare-environment.mjs production build",
     "check": "astro check",
     "preview": "astro preview",
-    "deploy": "pnpm build && wrangler deploy",
     "deploy:uat": "node scripts/cloudflare-environment.mjs uat deploy",
     "deploy:production": "node scripts/cloudflare-environment.mjs production deploy",
     "api:dev": "wrangler dev --config workers/api/wrangler.jsonc --env-file .dev.vars",
