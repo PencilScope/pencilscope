@@ -1,0 +1,46 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "pencilscope",
+	"main": "@astrojs/cloudflare/entrypoints/server",
+	"compatibility_date": "2026-10-04",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"assets": {
+		"binding": "ASSETS",
+		"directory": "./dist"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"APP_URL": "http://localhost:4321",
+		"ENVIRONMENT": "development"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "pencilscope-db",
+			"database_id": "8485d16d-3231-4385-9bbf-c51b4d699522",
+			"migrations_dir": "migrations"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "MEDIA",
+			"bucket_name": "pencilscope-media"
+		},
+		{
+			"bucket_name": "pencilscope-media",
+			"binding": "pencilscope_media"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "JOBS",
+				"queue": "pencilscope-jobs"
+			}
+		]
+	}
+}

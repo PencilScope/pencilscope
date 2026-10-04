@@ -1,0 +1,20 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { findCourseBySlug, formatPrice } from "@/lib/courses";
+import { getEnv } from "@/lib/runtime";
+let db: D1Database | undefined;
+try { db = getEnv(Astro.locals).DB; } catch { db = undefined; }
+const course = await findCourseBySlug(Astro.params.slug ?? "", db);
+if (!course) return Astro.redirect("/404");
+---
+
+<BaseLayout title={`${course.title} — PencilScope`} description={course.description}>
+  <section class="course-detail-hero">
+    <div class="shell detail-grid">
+      <div><a class="back-link" href="/courses">← All courses</a><div class="detail-tags"><span>{course.subject}</span><span>{course.level}</span><span>{course.deliveryMode}</span></div><h1>{course.title}</h1><p>{course.description}</p><div class="tutor-line"><span class="tutor-avatar">{course.tutorName.split(" ").at(-1)?.slice(0, 1)}</span><span>Designed and taught by <strong>{course.tutorName}</strong></span></div></div>
+      <aside class="enrol-card"><div class={`enrol-art accent-${course.accent}`}><span>{course.subject.slice(0, 1)}</span></div><div class="enrol-body"><span class="price-label">Course access</span><strong class="detail-price">{formatPrice(course.priceCents, course.currency)}</strong><ul><li>Structured video lessons</li><li>Guided quizzes and practice</li><li>Progress visible to parents</li><li>Certificate when completed</li></ul><form action="/api/checkout" method="post"><input type="hidden" name="courseId" value={course.id} /><button class="button button-full" type="submit">Enrol in this course</button></form><small>Secure checkout powered by Stripe</small></div></aside>
+    </div>
+  </section>
+  <section class="shell detail-content"><article><span class="eyebrow">What they’ll learn</span><h2>Confidence, one clear step at a time</h2><p>This starter course page is connected to the course catalogue and commerce API. Lesson plans, tutor previews and outcomes will be loaded from D1 as the authoring workflow is implemented.</p></article><aside><strong>Built for young learners</strong><p>Short sessions, accessible design and parent-guided access are part of every PencilScope learning path.</p></aside></section>
+</BaseLayout>
+

@@ -1,0 +1,18 @@
+---
+import CourseCard from "@/components/CourseCard.astro";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { listPublishedCourses } from "@/lib/courses";
+import { getEnv } from "@/lib/runtime";
+let db: D1Database | undefined;
+try { db = getEnv(Astro.locals).DB; } catch { db = undefined; }
+const courses = await listPublishedCourses(db);
+---
+
+<BaseLayout title="Explore courses — PencilScope" description="Explore trusted primary-school tuition courses for Singapore learners.">
+  <section class="page-hero shell"><span class="eyebrow">Explore learning</span><h1>Find their next <em>favourite subject.</em></h1><p>Clear explanations, meaningful practice and caring guidance—from the first lesson to the proud finish.</p></section>
+  <section class="shell catalogue-section">
+    <div class="filter-bar" aria-label="Course filters"><button class="filter active" type="button">All courses</button><button class="filter" type="button">Mathematics</button><button class="filter" type="button">Science</button><button class="filter" type="button">English</button><span class="result-count">{courses.length} courses</span></div>
+    <div class="course-grid">{courses.map((course) => <CourseCard course={course} />)}</div>
+  </section>
+</BaseLayout>
+

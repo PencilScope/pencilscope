@@ -1,0 +1,40 @@
+---
+import "@/styles/global.css";
+type Props = { title?: string; description?: string };
+const {
+  title = "PencilScope — Learn brightly",
+  description = "Trusted online tuition and guided learning for Singapore primary students."
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#17372b" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="shell nav-wrap">
+        <a class="brand" href="/" aria-label="PencilScope home"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span>PencilScope</span></a>
+        <nav aria-label="Primary navigation"><a href="/courses">Explore courses</a><a href="/#how-it-works">How it works</a><a href="/#for-tutors">For tutors</a></nav>
+        <div class="nav-actions"><a class="login-link" href="/sign-in">Sign in</a><a class="button button-small" href="/courses">Start learning</a></div>
+      </div>
+    </header>
+    <main><slot /></main>
+    <footer class="site-footer">
+      <div class="shell footer-grid">
+        <div><a class="brand brand-footer" href="/"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span>PencilScope</span></a><p>Curious minds grow here.</p></div>
+        <div><strong>Learn</strong><a href="/courses">All courses</a><a href="/courses?mode=live">Live classes</a><a href="/courses?mode=self-paced">Self-paced</a></div>
+        <div><strong>Company</strong><a href="/#for-tutors">Teach with us</a><a href="mailto:hello@pencilscope.sg">Contact</a><a href="/privacy">Privacy</a></div>
+        <div class="footer-note"><span>Built for families in Singapore</span><span>© {new Date().getFullYear()} PencilScope</span></div>
+      </div>
+    </footer>
+  </body>
+</html>

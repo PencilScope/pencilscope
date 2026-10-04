@@ -1,0 +1,54 @@
+---
+import CourseCard from "@/components/CourseCard.astro";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { listPublishedCourses } from "@/lib/courses";
+import { getEnv } from "@/lib/runtime";
+
+let db: D1Database | undefined;
+try { db = getEnv(Astro.locals).DB; } catch { db = undefined; }
+const courses = (await listPublishedCourses(db)).slice(0, 3);
+---
+
+<BaseLayout>
+  <section class="hero">
+    <div class="shell hero-grid">
+      <div class="hero-copy">
+        <span class="eyebrow">Learning made human</span>
+        <h1>Big ideas begin with a <em>little curiosity.</em></h1>
+        <p>Thoughtful online tuition, caring tutors and guided practice designed around how primary students learn best.</p>
+        <div class="hero-actions"><a class="button" href="/courses">Explore courses</a><a class="button button-ghost" href="#how-it-works"><span class="play">▶</span> See how it works</a></div>
+        <div class="trust-row"><div class="avatar-stack" aria-hidden="true"><span>JT</span><span>AL</span><span>SK</span></div><p><strong>Trusted by growing families</strong><br />Parent-guided, child-friendly learning</p></div>
+      </div>
+      <div class="hero-art" aria-label="A playful illustration representing guided learning">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <div class="book-card"><span class="spark spark-one">✦</span><span class="spark spark-two">✦</span><div class="book-page left"><span></span><span></span><span></span></div><div class="book-spine"></div><div class="book-page right"><span></span><span></span><span></span></div></div>
+        <div class="floating-note note-one"><span>✓</span> Weekly goals</div><div class="floating-note note-two"><span>★</span> Great progress!</div><span class="doodle doodle-one">∿</span><span class="doodle doodle-two">＋</span>
+      </div>
+    </div>
+    <div class="subject-ribbon" aria-label="Subjects available"><span>Mathematics</span><i></i><span>Science</span><i></i><span>English</span><i></i><span>Mother Tongue</span><i></i><span>Creative learning</span></div>
+  </section>
+
+  <section class="section shell">
+    <div class="section-heading"><div><span class="eyebrow">Made for bright beginnings</span><h2>Courses children look forward to</h2></div><a class="text-link" href="/courses">Browse all courses <span>→</span></a></div>
+    <div class="course-grid">{courses.map((course) => <CourseCard course={course} />)}</div>
+  </section>
+
+  <section class="how-section" id="how-it-works">
+    <div class="shell">
+      <div class="center-heading"><span class="eyebrow">Simple by design</span><h2>Learning that fits family life</h2><p>Start with a goal. We help with the rest.</p></div>
+      <div class="steps-grid">
+        <article><span class="step-number">01</span><div class="step-icon">⌕</div><h3>Find the right fit</h3><p>Explore trusted tutors and courses by subject, level and learning style.</p></article>
+        <article><span class="step-number">02</span><div class="step-icon">⌁</div><h3>Learn with guidance</h3><p>Mix focused lessons, live help and practice that meets each learner where they are.</p></article>
+        <article><span class="step-number">03</span><div class="step-icon">↗</div><h3>See progress grow</h3><p>Parents and students can celebrate milestones and know what comes next.</p></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="tutor-band" id="for-tutors">
+    <div class="shell tutor-grid">
+      <div><span class="eyebrow eyebrow-light">For great educators</span><h2>Teach your way.<br />Reach more learners.</h2><p>Build beautiful courses, run live classes and focus on what matters most: helping children understand.</p><a class="button button-light" href="mailto:hello@pencilscope.sg?subject=Teach%20with%20PencilScope">Become a founding tutor</a></div>
+      <div class="tutor-quote"><span class="quote-mark">“</span><blockquote>PencilScope gives every lesson a clear path, while leaving room for the magic that happens when a child finally gets it.</blockquote><p>Founding tutor programme · Singapore</p></div>
+    </div>
+  </section>
+</BaseLayout>
+

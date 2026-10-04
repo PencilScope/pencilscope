@@ -1,0 +1,23 @@
+---
+import { formatPrice, type CourseSummary } from "@/lib/courses";
+type Props = { course: CourseSummary };
+const { course } = Astro.props;
+---
+
+<article class={`course-card accent-${course.accent}`}>
+  <a class="course-visual" href={`/courses/${course.slug}`} aria-label={`View ${course.title}`}>
+    <span class="subject-pill">{course.subject}</span>
+    <span class="course-mark" aria-hidden="true">{course.subject.slice(0, 1)}</span>
+    <span class="level">{course.level}</span>
+  </a>
+  <div class="course-body">
+    <div class="course-meta"><span>{course.deliveryMode}</span><span>by {course.tutorName}</span></div>
+    <h3><a href={`/courses/${course.slug}`}>{course.title}</a></h3>
+    <p>{course.description}</p>
+    <div class="course-footer">
+      <strong>{formatPrice(course.priceCents, course.currency)}</strong>
+      <a class="text-link" href={`/courses/${course.slug}`}>View course <span>→</span></a>
+    </div>
+  </div>
+</article>
+
