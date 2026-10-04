@@ -1,0 +1,100 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in");
+const response = await requestApi("/api/dashboard", { userId });
+if (response.status === 401) return Astro.redirect("/sign-in");
+const data = await response.json<{
+  user: { id: string; display_name: string; displayName?: string; role: string };
+  students?: Array<{ id: string; display_name: string; primary_level: string | null }>;
+  enrolments?: Array<{
+    id: string;
+    student_user_id: string;
+    course_id: string;
+    status: string;
+    title: string;
+    subject: string;
+    progress_percent: number;
+  }>;
+  tutorCourses?: Array<{
+    id: string;
+    slug: string;
+    title: string;
+    status: string;
+    pricing_status: string;
+    enrolment_count: number;
+  }>;
+}>();
+const displayName = data.user.displayName ?? data.user.display_name;
+const error = Astro.url.searchParams.get("error");
+const added = Astro.url.searchParams.get("added");
+---
+<BaseLayout title="Dashboard — PencilScope">
+  <section class="dashboard-hero">
+    <div class="shell">
+      <span class="eyebrow">Your PencilScope</span>
+      <h1>Welcome, {displayName}.</h1>
+      <p>Continue learning, support your learners, or shape the next great course.</p>
+    </div>
+  </section>
+  <section class="shell dashboard-grid">
+    {error && <p class="form-error dashboard-message" role="alert">{error}</p>}
+    {added && <p class="form-success dashboard-message">Learner profile created.</p>}
+
+    {data.user.role === "parent" && (
+      <>
+        <article class="panel">
+          <span class="eyebrow">Family</span>
+          <h2>Learner profiles</h2>
+          {data.students?.length ? (
+            <div class="learner-list">
+              {data.students.map((student) => (
+                <div><span class="tutor-avatar">{student.display_name.slice(0, 1)}</span><p><strong>{student.display_name}</strong><small>{student.primary_level}</small></p></div>
+              ))}
+            </div>
+          ) : <p>Add a learner before purchasing a course.</p>}
+          <form class="stack-form compact-form" action="/api/students" method="post">
+            <label>Learner name<input name="displayName" required minlength="2" /></label>
+            <label>Primary level<select name="primaryLevel"><option>Primary 1</option><option>Primary 2</option><option>Primary 3</option><option>Primary 4</option><option>Primary 5</option><option>Primary 6</option></select></label>
+            <button class="button" type="submit">Add learner</button>
+          </form>
+        </article>
+        <article class="panel panel-wide">
+          <span class="eyebrow">Course access</span>
+          <h2>Active learning</h2>
+          {data.enrolments?.length ? (
+            <div class="dashboard-courses">
+              {data.enrolments.map((enrolment) => (
+                <a href={`/learn/${enrolment.course_id}?studentId=${enrolment.student_user_id}`}>
+                  <span>{enrolment.subject}</span><strong>{enrolment.title}</strong>
+                  <small>{Math.round(enrolment.progress_percent)}% complete · {enrolment.status}</small>
+                </a>
+              ))}
+            </div>
+          ) : <p>No active enrolments yet. <a class="text-link" href="/courses">Explore courses</a></p>}
+        </article>
+      </>
+    )}
+
+    {data.user.role === "student" && (
+      <article class="panel panel-wide">
+        <span class="eyebrow">My learning</span><h2>Courses</h2>
+        {data.enrolments?.length ? <div class="dashboard-courses">{data.enrolments.map((enrolment) => (
+          <a href={`/learn/${enrolment.course_id}`}><span>{enrolment.subject}</span><strong>{enrolment.title}</strong><small>{Math.round(enrolment.progress_percent)}% complete</small></a>
+        ))}</div> : <p>You do not have an active course yet.</p>}
+      </article>
+    )}
+
+    {(data.user.role === "tutor" || data.user.role === "admin") && (
+      <article class="panel panel-wide">
+        <span class="eyebrow">Tutor studio</span><h2>Your courses</h2>
+        {data.tutorCourses?.length ? <div class="dashboard-courses">{data.tutorCourses.map((course) => (
+          <a href={`/tutor?courseId=${course.id}`}><span>{course.status} · {course.pricing_status}</span><strong>{course.title}</strong><small>{course.enrolment_count} learners</small></a>
+        ))}</div> : <p>Your tutor profile must be approved before publishing courses.</p>}
+        <a class="button" href="/tutor">Open tutor studio</a>
+      </article>
+    )}
+  </section>
+</BaseLayout>

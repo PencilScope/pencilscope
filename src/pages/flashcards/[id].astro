@@ -1,0 +1,80 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in");
+const deckId = Astro.params.id ?? "";
+const studentId = Astro.url.searchParams.get("studentId");
+const query = studentId ? `?studentId=${encodeURIComponent(studentId)}` : "";
+const response = await requestApi(`/api/flashcard-decks/${encodeURIComponent(deckId)}${query}`, { userId });
+if (!response.ok) return Astro.redirect("/dashboard?error=These%20flashcards%20are%20not%20available.");
+const data = await response.json<{
+  deck: { id: string; course_id: string; title: string; description: string };
+  cards: Array<{ id: string; front_text: string; back_text: string; confidence: number | null; next_review_at: string | null }>;
+}>();
+---
+<BaseLayout title={`${data.deck.title} — PencilScope`}>
+  <section class="dashboard-hero"><div class="shell">
+    <a class="back-link" href={`/learn/${data.deck.course_id}${query}`}>← Course</a>
+    <span class="eyebrow">Flashcard review</span><h1>{data.deck.title}</h1><p>{data.deck.description}</p>
+  </div></section>
+  <section class="shell flashcard-shell" data-student-id={studentId ?? ""}>
+    {data.cards.map((card, index) => (
+      <article class="flashcard" data-card-id={card.id}>
+        <span class="card-count">{index + 1} / {data.cards.length}</span>
+        <h2>{card.front_text}</h2>
+        <button class="text-link reveal-card" type="button">Reveal answer</button>
+        <div class="flashcard-answer" hidden>
+          <p>{card.back_text}</p>
+          <span>How confident were you?</span>
+          <div class="confidence-row">
+            <button type="button" data-confidence="1">Again</button>
+            <button type="button" data-confidence="2">Hard</button>
+            <button type="button" data-confidence="3">Good</button>
+            <button type="button" data-confidence="4">Easy</button>
+          </div>
+        </div>
+        <small class="review-status" aria-live="polite">{card.confidence ? `Last confidence: ${card.confidence}/4` : "Not reviewed yet"}</small>
+      </article>
+    ))}
+  </section>
+  <script>
+    const shell = document.querySelector<HTMLElement>(".flashcard-shell");
+    document.querySelectorAll<HTMLButtonElement>(".reveal-card").forEach((button) => {
+      button.addEventListener("click", () => {
+        const answer = button.closest(".flashcard")?.querySelector<HTMLElement>(".flashcard-answer");
+        if (answer) answer.hidden = false;
+        button.hidden = true;
+      });
+    });
+    document.querySelectorAll<HTMLButtonElement>("[data-confidence]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const card = button.closest<HTMLElement>(".flashcard");
+        const status = card?.querySelector<HTMLElement>(".review-status");
+        if (!card || !status) return;
+        const response = await fetch(`/api/flashcards/${encodeURIComponent(card.dataset.cardId ?? "")}/review`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            studentId: shell?.dataset.studentId || undefined,
+            confidence: Number(button.dataset.confidence)
+          })
+        });
+        const result = await response.json() as {
+          review: { intervalDays: number };
+          error?: { message?: string };
+        };
+        if (!response.ok) {
+          status.textContent = result.error?.message ?? "Could not save this review.";
+          return;
+        }
+        status.textContent = result.review.intervalDays
+          ? `Saved. Review again in ${result.review.intervalDays} day(s).`
+          : "Saved. Review this card again today.";
+        card.querySelectorAll("button").forEach((control) => control.setAttribute("disabled", ""));
+        card.classList.add("reviewed");
+      });
+    });
+  </script>
+</BaseLayout>

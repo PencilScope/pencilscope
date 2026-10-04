@@ -1,0 +1,191 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in");
+const dashboardResponse = await requestApi("/api/dashboard", { userId });
+if (!dashboardResponse.ok) return Astro.redirect("/sign-in");
+const dashboard = await dashboardResponse.json<{
+  user: { id: string; role: string; display_name: string };
+  tutorCourses?: Array<{ id: string; title: string; status: string; pricing_status: string }>;
+}>();
+if (!["tutor", "admin"].includes(dashboard.user.role)) return Astro.redirect("/dashboard");
+const selectedId = Astro.url.searchParams.get("courseId");
+let studio: {
+  course: { id: string; title: string; status: string; pricing_status: string };
+  modules: Array<{ id: string; title: string; position: number }>;
+  lessons: Array<{ id: string; module_id: string; title: string; lesson_type: string; position: number }>;
+  assessments: Array<{ id: string; title: string; assessment_type: string; status: string }>;
+  flashcardDecks: Array<{ id: string; title: string; status: string }>;
+} | null = null;
+let studioError = "";
+if (selectedId) {
+  const studioResponse = await requestApi(`/api/tutor/courses/${encodeURIComponent(selectedId)}/studio`, { userId });
+  if (studioResponse.ok) studio = await studioResponse.json();
+  else {
+    const problem: { error?: { message?: string } } =
+      await studioResponse.json<{ error?: { message?: string } }>().catch(() => ({}));
+    studioError = problem.error?.message ?? "The course studio is unavailable.";
+  }
+}
+---
+<BaseLayout title="Tutor studio — PencilScope">
+  <section class="dashboard-hero"><div class="shell">
+    <a class="back-link" href="/dashboard">← Dashboard</a>
+    <span class="eyebrow">Tutor studio</span><h1>Build a learning journey.</h1>
+    <p>Create the course first, then add lessons, assessments and flashcards. Publishing a course creates its Stripe product and price automatically.</p>
+  </div></section>
+  <section class="shell studio-layout">
+    <aside class="panel studio-sidebar">
+      <h2>Courses</h2>
+      <nav>
+        {dashboard.tutorCourses?.map((course) => (
+          <a class:list={{ active: course.id === selectedId }} href={`/tutor?courseId=${course.id}`}>
+            <strong>{course.title}</strong><small>{course.status} · {course.pricing_status}</small>
+          </a>
+        ))}
+      </nav>
+      <details open={!dashboard.tutorCourses?.length}>
+        <summary>Create course</summary>
+        <form class="stack-form api-form" data-kind="course" action="/api/tutor/courses" method="post">
+          <label>Title<input name="title" required minlength="3" /></label>
+          <label>Description<textarea name="description" required minlength="20" rows="4"></textarea></label>
+          <label>Subject<input name="subject" required /></label>
+          <label>Primary level<input name="primaryLevel" required placeholder="Primary 5" /></label>
+          <label>Delivery<select name="deliveryMode"><option value="self-paced">Self-paced</option><option value="live">Live</option><option value="hybrid">Hybrid</option><option value="ai-supported">AI-supported</option></select></label>
+          <label>Price (SGD)<input name="priceSGD" type="number" min="0.50" step="0.01" required /></label>
+          <button class="button" type="submit">Save draft</button>
+          <p class="form-message" aria-live="polite"></p>
+        </form>
+      </details>
+    </aside>
+
+    <main class="studio-main">
+      {studioError && <p class="form-error">{studioError}</p>}
+      {!selectedId && <article class="panel empty-state"><h2>Select a course</h2><p>Choose an existing course or create a new draft to start authoring.</p></article>}
+      {studio && (
+        <>
+          <article class="panel studio-heading">
+            <div><span class="eyebrow">{studio.course.status} · pricing {studio.course.pricing_status}</span><h2>{studio.course.title}</h2></div>
+            {studio.course.status !== "published" && <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/publish`} method="post"><button class="button" type="submit">Publish course & price</button><p class="form-message"></p></form>}
+          </article>
+
+          <article class="panel">
+            <span class="eyebrow">Curriculum</span><h2>Modules and lessons</h2>
+            <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/modules`} method="post">
+              <input name="title" required placeholder="New module title" /><input name="position" type="number" min="1" value={studio.modules.length + 1} />
+              <button class="button button-small" type="submit">Add module</button><p class="form-message"></p>
+            </form>
+            <div class="studio-items">
+              {studio.modules.map((module) => (
+                <section>
+                  <h3>{module.position}. {module.title}</h3>
+                  <ul>{studio.lessons.filter((lesson) => lesson.module_id === module.id).map((lesson) => <li>{lesson.title} <small>{lesson.lesson_type}</small></li>)}</ul>
+                  <form class="inline-form api-form" action={`/api/tutor/modules/${module.id}/lessons`} method="post">
+                    <input name="title" required placeholder="Lesson title" />
+                    <select name="lessonType"><option value="video">Video</option><option value="text">Text</option><option value="document">Document</option><option value="live">Live</option><option value="ai">AI-supported</option></select>
+                    <input name="position" type="number" min="1" value={studio.lessons.filter((lesson) => lesson.module_id === module.id).length + 1} />
+                    <button class="button button-small" type="submit">Add lesson</button><p class="form-message"></p>
+                  </form>
+                </section>
+              ))}
+            </div>
+          </article>
+
+          <article class="panel">
+            <span class="eyebrow">Knowledge checks</span><h2>Quizzes, tests and mock exams</h2>
+            <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/assessments`} method="post">
+              <input name="title" required placeholder="Assessment title" />
+              <select name="assessmentType"><option value="quiz">Quiz</option><option value="test">Test</option><option value="mock_exam">Mock exam</option></select>
+              <input name="passingScore" type="number" min="0" max="100" value="50" />
+              <button class="button button-small" type="submit">Create draft</button><p class="form-message"></p>
+            </form>
+            <div class="studio-items">{studio.assessments.map((assessment) => (
+              <details>
+                <summary>{assessment.title} <small>{assessment.assessment_type} · {assessment.status}</small></summary>
+                {assessment.status === "draft" && <>
+                  <form class="stack-form api-form" data-kind="question" action={`/api/tutor/assessments/${assessment.id}/questions`} method="post">
+                    <label>Question<input name="prompt" required /></label>
+                    <div class="option-editor">
+                      <label>Option A<input name="optionA" required /></label><label>Option B<input name="optionB" required /></label>
+                      <label>Option C<input name="optionC" /></label><label>Option D<input name="optionD" /></label>
+                    </div>
+                    <label>Correct answer<select name="correct"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
+                    <button class="button button-small" type="submit">Add question</button><p class="form-message"></p>
+                  </form>
+                  <form class="api-form publish-form" action={`/api/tutor/assessments/${assessment.id}/publish`} method="post"><button class="text-link" type="submit">Publish assessment</button><p class="form-message"></p></form>
+                </>}
+              </details>
+            ))}</div>
+          </article>
+
+          <article class="panel">
+            <span class="eyebrow">Recall practice</span><h2>Flashcards</h2>
+            <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/flashcard-decks`} method="post">
+              <input name="title" required placeholder="Deck title" /><input name="description" placeholder="Short description" />
+              <button class="button button-small" type="submit">Create deck</button><p class="form-message"></p>
+            </form>
+            <div class="studio-items">{studio.flashcardDecks.map((deck) => (
+              <details>
+                <summary>{deck.title} <small>{deck.status}</small></summary>
+                {deck.status === "draft" && <>
+                  <form class="inline-form api-form" data-kind="card" action={`/api/tutor/flashcard-decks/${deck.id}/cards`} method="post">
+                    <input name="front" required placeholder="Front" /><input name="back" required placeholder="Back" />
+                    <button class="button button-small" type="submit">Add card</button><p class="form-message"></p>
+                  </form>
+                  <form class="api-form publish-form" action={`/api/tutor/flashcard-decks/${deck.id}/publish`} method="post"><button class="text-link" type="submit">Publish deck</button><p class="form-message"></p></form>
+                </>}
+              </details>
+            ))}</div>
+          </article>
+        </>
+      )}
+    </main>
+  </section>
+  <script>
+    document.querySelectorAll<HTMLFormElement>(".api-form").forEach((form) => {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const message = form.querySelector<HTMLElement>(".form-message");
+        const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+        if (button) button.disabled = true;
+        if (message) { message.className = "form-message"; message.textContent = "Saving…"; }
+        const values = Object.fromEntries(new FormData(form));
+        let body: Record<string, unknown> = { ...values };
+        if (form.dataset.kind === "course") {
+          body = { ...values, priceCents: Math.round(Number(values.priceSGD) * 100), currency: "SGD", publish: false };
+          delete body.priceSGD;
+        }
+        if (form.dataset.kind === "question") {
+          const correct = Number(values.correct);
+          body = {
+            prompt: values.prompt, questionType: "multiple_choice", points: 1,
+            options: [values.optionA, values.optionB, values.optionC, values.optionD]
+              .map((label, index) => ({ label, isCorrect: index === correct }))
+              .filter((option) => typeof option.label === "string" && option.label.trim())
+          };
+        }
+        if ("position" in body) body.position = Number(body.position);
+        if ("passingScore" in body) body.passingScore = Number(body.passingScore);
+        const response = await fetch(form.action, {
+          method: form.method.toUpperCase(),
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const result = await response.json() as {
+          course?: { id?: string };
+          error?: { message?: string };
+        };
+        if (!response.ok) {
+          if (message) { message.className = "form-error"; message.textContent = result.error?.message ?? "Could not save."; }
+          if (button) button.disabled = false;
+          return;
+        }
+        if (message) { message.className = "form-success"; message.textContent = "Saved."; }
+        const courseId = result.course?.id ?? new URL(location.href).searchParams.get("courseId");
+        location.href = courseId ? `/tutor?courseId=${encodeURIComponent(courseId)}` : "/tutor";
+      });
+    });
+  </script>
+</BaseLayout>

@@ -1,0 +1,104 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in");
+const assessmentId = Astro.params.id ?? "";
+const studentId = Astro.url.searchParams.get("studentId");
+const query = studentId ? `?studentId=${encodeURIComponent(studentId)}` : "";
+const response = await requestApi(`/api/assessments/${encodeURIComponent(assessmentId)}${query}`, { userId });
+if (!response.ok) return Astro.redirect("/dashboard?error=This%20assessment%20is%20not%20available.");
+const data = await response.json<{
+  assessment: {
+    id: string; course_id: string; assessment_type: string; title: string; instructions: string;
+    time_limit_seconds: number | null; attempt_limit: number | null; passing_score: number;
+  };
+  questions: Array<{ id: string; question_type: string; prompt: string; points: number; position: number }>;
+  options: Array<{ id: string; question_id: string; label: string; position: number }>;
+}>();
+---
+<BaseLayout title={`${data.assessment.title} — PencilScope`}>
+  <section class="dashboard-hero"><div class="shell">
+    <a class="back-link" href={`/learn/${data.assessment.course_id}${query}`}>← Course</a>
+    <span class="eyebrow">{data.assessment.assessment_type.replace("_", " ")}</span>
+    <h1>{data.assessment.title}</h1>
+    <p>{data.assessment.instructions || "Answer every question, then submit when you are ready."}</p>
+    <div class="activity-meta">
+      {data.assessment.time_limit_seconds && <span>{Math.ceil(data.assessment.time_limit_seconds / 60)} minutes</span>}
+      {data.assessment.attempt_limit && <span>{data.assessment.attempt_limit} attempt limit</span>}
+      <span>{data.assessment.passing_score}% to pass</span>
+    </div>
+  </div></section>
+  <section class="shell activity-shell">
+    <form id="assessment-form" data-assessment-id={assessmentId} data-student-id={studentId ?? ""}>
+      {data.questions.map((question, index) => (
+        <fieldset class="question-card" data-question-id={question.id} data-question-type={question.question_type}>
+          <legend><span>{index + 1}</span>{question.prompt}</legend>
+          {question.question_type === "short_text"
+            ? <textarea name={question.id} rows="5" required></textarea>
+            : <div class="option-list">{data.options.filter((option) => option.question_id === question.id).map((option) => (
+                <label><input type="radio" name={question.id} value={option.id} required /><span>{option.label}</span></label>
+              ))}</div>}
+        </fieldset>
+      ))}
+      <p id="assessment-status" class="form-message" aria-live="polite"></p>
+      <button class="button" type="submit">Submit answers</button>
+    </form>
+  </section>
+  <script>
+    const form = document.querySelector<HTMLFormElement>("#assessment-form");
+    const status = document.querySelector<HTMLElement>("#assessment-status");
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!status) return;
+      const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+      if (button) button.disabled = true;
+      status.className = "form-message";
+      status.textContent = "Saving your answers…";
+      try {
+        const assessmentId = form.dataset.assessmentId ?? "";
+        const studentId = form.dataset.studentId || undefined;
+        const started = await fetch(`/api/assessments/${encodeURIComponent(assessmentId)}/attempts`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ studentId })
+        });
+        const startedData = await started.json() as {
+          attempt: { id: string };
+          error?: { message?: string };
+        };
+        if (!started.ok) throw new Error(startedData.error?.message ?? "Could not start the assessment.");
+        const attemptId = startedData.attempt.id;
+        const answers = new FormData(form);
+        for (const question of form.querySelectorAll<HTMLElement>("[data-question-id]")) {
+          const questionId = question.dataset.questionId ?? "";
+          const answer = answers.get(questionId);
+          const payload = question.dataset.questionType === "short_text"
+            ? { textResponse: answer }
+            : { selectedOptionId: answer };
+          const saved = await fetch(`/api/assessment-attempts/${encodeURIComponent(attemptId)}/responses/${encodeURIComponent(questionId)}`, {
+            method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload)
+          });
+          if (!saved.ok) {
+            const savedData = await saved.json() as { error?: { message?: string } };
+            throw new Error(savedData.error?.message ?? "An answer could not be saved.");
+          }
+        }
+        const submitted = await fetch(`/api/assessment-attempts/${encodeURIComponent(attemptId)}/submit`, { method: "POST" });
+        const submittedData = await submitted.json() as {
+          result: { status: string; passed: boolean; score: number };
+          error?: { message?: string };
+        };
+        if (!submitted.ok) throw new Error(submittedData.error?.message ?? "Could not submit the assessment.");
+        status.className = submittedData.result.passed ? "form-success" : "form-error";
+        status.textContent = submittedData.result.status === "grading"
+          ? "Submitted. Your tutor will finish grading this attempt."
+          : `${submittedData.result.passed ? "Passed" : "Keep practising"} — score: ${submittedData.result.score}%.`;
+        form.querySelectorAll("input, textarea").forEach((control) => control.setAttribute("disabled", ""));
+      } catch (error) {
+        status.className = "form-error";
+        status.textContent = error instanceof Error ? error.message : "Something went wrong.";
+        if (button) button.disabled = false;
+      }
+    });
+  </script>
+</BaseLayout>

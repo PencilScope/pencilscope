@@ -14,6 +14,13 @@ PencilScope is a child-friendly online tuition marketplace for Singapore primary
 - Private API Worker connected to the Astro web Worker with a Service Binding
 - API-owned R2, Queue, D1, Stripe and Resend bindings
 - Health endpoint at `/api/health`
+- Parent and tutor registration with session-backed sign-in
+- Parent-managed learner profiles and role-aware dashboards
+- Stripe payment-to-enrolment entitlement assignment
+- Protected course modules, lessons and progress tracking
+- A shared quiz, test and mock-exam engine with automatic choice grading
+- Spaced-repetition flashcard review
+- Tutor studio for courses, modules, lessons, assessments and flashcards
 
 ## Local setup
 
@@ -25,7 +32,7 @@ Requirements: Node.js 22.12 or newer and pnpm.
 4. Start the API Worker with `pnpm api:dev`.
 5. In a second terminal, start the Astro web Worker with `pnpm dev`.
 
-The catalogue renders sample content before D1 is initialised. Checkout requires migrated D1 data, a Stripe test secret and Stripe price IDs added to course records.
+The catalogue renders sample content before D1 is initialised. Publishing a course from the tutor studio creates its Stripe Product and one-time Price. Checkout requires migrated D1 data, Stripe test credentials and an approved tutor account.
 
 ## Cloudflare environments
 
@@ -59,7 +66,28 @@ Configure separate Stripe webhook endpoints for:
 - `https://pencilscope-uat.rdproducts-adm1.workers.dev/api/webhooks/stripe`
 - `https://pencilscope-production.rdproducts-adm1.workers.dev/api/webhooks/stripe`
 
-## Current boundary
+## Learning journeys
+
+### Parent and student
+
+1. A parent registers, signs in and creates one or more learner profiles.
+2. The parent chooses a learner on a course page and completes Stripe Checkout.
+3. The verified Stripe webhook records the order and activates that learner's enrolment.
+4. The dashboard links to the protected course player, which records lesson progress.
+5. Quizzes, tests and mock exams share the same versioned attempt and response model.
+6. Flashcard confidence ratings schedule each learner's next review.
+
+Student accounts can use the same learning endpoints directly. Parent access to progress, assessments and flashcards is limited to linked learner profiles.
+
+### Tutor
+
+New tutor registrations are pending until `tutor_profiles.verification_status` is changed to `approved` by an administrator. Approved tutors use `/tutor` to create draft courses and add:
+
+- ordered modules and lessons;
+- quizzes, tests and mock exams with choice questions;
+- flashcard decks and cards.
+
+Assessments and decks must contain content before they can be published. Course publication provisions Stripe pricing automatically.
 
 ### Tutor course pricing API
 
@@ -71,4 +99,6 @@ All tutor endpoints require an authenticated approved tutor (or admin) session.
 
 Stripe creation calls use stable idempotency keys. A failed sync leaves the course unpublished with `pricing_status = 'failed'`, allowing a safe retry. Drafts do not create Stripe resources until publication.
 
-This is the implementation foundation, not a production-ready release. Parent/student linking, tutor authoring UI, enrolment assignment after checkout, assessments, live-class integration and the admin console are subsequent milestones.
+## Remaining production work
+
+The implemented journeys are an MVP. Before a public launch, add an administrator approval console, password reset and email verification, tutor review/moderation, manual grading for written responses, certificates, live-class provider integration, notification emails and a full automated browser test suite.

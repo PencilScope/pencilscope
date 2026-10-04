@@ -10,8 +10,9 @@ import {
 import { findCourseBySlug, listPublishedCourses } from "../../../src/lib/courses";
 import { json, problem } from "../../../src/lib/http";
 import { constructStripeEvent, createStripe } from "../../../src/lib/stripe";
+import { handleJourneyRequest } from "./journeys";
 
-type ApiEnvironment = {
+export type ApiEnvironment = {
   DB: D1Database;
   MEDIA: R2Bucket;
   JOBS: Queue;
@@ -66,8 +67,29 @@ async function courseBySlug(env: ApiEnvironment, slug: string): Promise<Response
 async function checkout(request: Request, env: ApiEnvironment): Promise<Response> {
   const form = await request.formData();
   const courseId = form.get("courseId");
+  const requestedStudentId = form.get("studentId");
   if (typeof courseId !== "string" || !courseId) {
     return problem(400, "invalid_course", "Choose a valid course.");
+  }
+  const actorId = authenticatedUserId(request);
+  if (!actorId) return problem(401, "authentication_required", "Sign in before enrolling.");
+  const actor = await env.DB.prepare(
+    "SELECT id, role FROM users WHERE id = ? AND status = 'active'"
+  ).bind(actorId).first<{ id: string; role: string }>();
+  if (!actor) return problem(401, "authentication_required", "Sign in before enrolling.");
+  let studentId: string;
+  let parentUserId: string | null = null;
+  if (actor.role === "student") {
+    studentId = actor.id;
+  } else if (actor.role === "parent" && typeof requestedStudentId === "string" && requestedStudentId) {
+    const linked = await env.DB.prepare(
+      "SELECT 1 FROM parent_student_relationships WHERE parent_user_id = ? AND student_user_id = ?"
+    ).bind(actor.id, requestedStudentId).first();
+    if (!linked) return problem(403, "student_forbidden", "Choose a student linked to your account.");
+    studentId = requestedStudentId;
+    parentUserId = actor.id;
+  } else {
+    return problem(403, "student_required", "Choose a linked student for this enrolment.");
   }
 
   const course = await env.DB.prepare(
@@ -78,6 +100,10 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
   if (!course.stripe_price_id) {
     return problem(409, "checkout_not_configured", "Checkout is not configured for this course yet.");
   }
+  const existing = await env.DB.prepare(
+    "SELECT id FROM enrolments WHERE course_id = ? AND student_user_id = ? AND status IN ('active', 'completed')"
+  ).bind(course.id, studentId).first();
+  if (existing) return problem(409, "already_enrolled", "This student already has access to the course.");
 
   try {
     const stripe = createStripe(requireSecret(env, "STRIPE_SECRET_KEY"));
@@ -86,7 +112,12 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
       line_items: [{ price: course.stripe_price_id, quantity: 1 }],
       success_url: `${env.APP_URL}/courses/${course.slug}?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${env.APP_URL}/courses/${course.slug}?checkout=cancelled`,
-      metadata: { courseId: course.id, stripePriceId: course.stripe_price_id }
+      metadata: {
+        courseId: course.id,
+        stripePriceId: course.stripe_price_id,
+        studentUserId: studentId,
+        parentUserId: parentUserId ?? ""
+      }
     });
     if (!session.url) return problem(502, "stripe_error", "Stripe did not return a checkout URL.");
     return Response.redirect(session.url, 303);
@@ -98,23 +129,44 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
 
 async function recordCompletedCheckout(db: D1Database, session: Stripe.Checkout.Session): Promise<void> {
   const courseId = session.metadata?.courseId;
-  if (!courseId) throw new Error("Checkout session is missing courseId metadata");
+  const studentUserId = session.metadata?.studentUserId;
+  const parentUserId = session.metadata?.parentUserId || null;
+  if (!courseId || !studentUserId) throw new Error("Checkout session is missing enrolment metadata");
   const now = new Date().toISOString();
-  await db.prepare(
-    `INSERT INTO orders (id, parent_user_id, student_user_id, course_id, stripe_checkout_session_id,
+  const orderId = crypto.randomUUID();
+  const enrolmentId = crypto.randomUUID();
+  await db.batch([
+    db.prepare(
+      `INSERT INTO orders (id, parent_user_id, student_user_id, course_id, stripe_checkout_session_id,
       stripe_payment_intent_id, stripe_price_id, amount_cents, currency, status, created_at, updated_at)
-    VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, 'paid', ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?)
     ON CONFLICT(stripe_checkout_session_id) DO UPDATE SET
       stripe_payment_intent_id = excluded.stripe_payment_intent_id,
       stripe_price_id = excluded.stripe_price_id,
       amount_cents = excluded.amount_cents, currency = excluded.currency,
       status = 'paid', updated_at = excluded.updated_at`
-  ).bind(
-    crypto.randomUUID(), courseId, session.id,
-    typeof session.payment_intent === "string" ? session.payment_intent : null,
-    session.metadata?.stripePriceId ?? null,
-    session.amount_total ?? 0, (session.currency ?? "sgd").toUpperCase(), now, now
-  ).run();
+    ).bind(
+      orderId,
+      parentUserId,
+      studentUserId,
+      courseId,
+      session.id,
+      typeof session.payment_intent === "string" ? session.payment_intent : null,
+      session.metadata?.stripePriceId ?? null,
+      session.amount_total ?? 0,
+      (session.currency ?? "sgd").toUpperCase(),
+      now,
+      now
+    ),
+    db.prepare(
+      `INSERT INTO enrolments
+        (id, course_id, student_user_id, order_id, status, enrolled_at)
+       VALUES (?, ?, ?, ?, 'active', ?)
+       ON CONFLICT(course_id, student_user_id) DO UPDATE SET
+        order_id = excluded.order_id, status = 'active', enrolled_at = excluded.enrolled_at,
+        completed_at = NULL`
+    ).bind(enrolmentId, courseId, studentUserId, orderId, now)
+  ]);
 }
 
 async function stripeWebhook(request: Request, env: ApiEnvironment): Promise<Response> {
@@ -402,6 +454,8 @@ export default {
     const { pathname } = url;
 
     if (request.method === "GET" && pathname === "/api/health") return health(env);
+    const journeyResponse = await handleJourneyRequest(request, env, pathname);
+    if (journeyResponse) return journeyResponse;
     if (request.method === "GET" && pathname === "/api/courses") return courses(env);
     if (request.method === "GET" && pathname.startsWith("/api/courses/")) {
       return courseBySlug(env, decodeURIComponent(pathname.slice("/api/courses/".length)));

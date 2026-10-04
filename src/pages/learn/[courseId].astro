@@ -1,0 +1,58 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in");
+const courseId = Astro.params.courseId ?? "";
+const studentId = Astro.url.searchParams.get("studentId");
+const query = studentId ? `?studentId=${encodeURIComponent(studentId)}` : "";
+const response = await requestApi(`/api/learning/courses/${encodeURIComponent(courseId)}${query}`, { userId });
+if (response.status === 403) return Astro.redirect("/dashboard?error=Course%20access%20is%20not%20available.");
+if (!response.ok) return Astro.redirect("/404");
+const data = await response.json<{
+  course: { id: string; title: string; description: string; subject: string; primary_level: string };
+  modules: Array<{ id: string; title: string; position: number }>;
+  lessons: Array<{
+    id: string; module_id: string; title: string; lesson_type: string;
+    content_json: string; estimated_minutes: number | null;
+    progress_status: string; progress_percent: number;
+  }>;
+  assessments: Array<{
+    id: string; lesson_id: string | null; assessment_type: string; title: string;
+    time_limit_seconds: number | null; attempt_limit: number | null;
+  }>;
+  flashcardDecks: Array<{ id: string; lesson_id: string | null; title: string; description: string }>;
+}>();
+const studentQuery = studentId ? `?studentId=${encodeURIComponent(studentId)}` : "";
+---
+<BaseLayout title={`${data.course.title} — Learning`}>
+  <section class="dashboard-hero learning-hero"><div class="shell"><a class="back-link" href="/dashboard">← Dashboard</a><span class="eyebrow">{data.course.subject} · {data.course.primary_level}</span><h1>{data.course.title}</h1><p>{data.course.description}</p></div></section>
+  <section class="shell learning-layout">
+    <main>
+      {data.modules.map((module) => (
+        <section class="learning-module">
+          <div class="module-heading"><span>{String(module.position).padStart(2, "0")}</span><h2>{module.title}</h2></div>
+          <div class="lesson-list">
+            {data.lessons.filter((lesson) => lesson.module_id === module.id).map((lesson) => {
+              const content = JSON.parse(lesson.content_json || "{}");
+              const assessment = data.assessments.find((item) => item.lesson_id === lesson.id);
+              const deck = data.flashcardDecks.find((item) => item.lesson_id === lesson.id);
+              return <article class:list={["lesson-row", { complete: lesson.progress_status === "completed" }]}>
+                <div class="lesson-kind">{lesson.lesson_type}</div>
+                <div><h3>{lesson.title}</h3><p>{content.summary ?? "Tutor-guided learning activity."}</p><small>{lesson.estimated_minutes ? `${lesson.estimated_minutes} min` : "Self-paced"} · {lesson.progress_status}</small></div>
+                <div class="lesson-actions">
+                  {assessment && <a class="button button-small" href={`/assessment/${assessment.id}${studentQuery}`}>Start {assessment.assessment_type.replace("_", " ")}</a>}
+                  {deck && <a class="button button-small" href={`/flashcards/${deck.id}${studentQuery}`}>Study cards</a>}
+                  {!assessment && !deck && lesson.progress_status !== "completed" && <form action={`/api/learning/lessons/${lesson.id}/complete`} method="post"><input type="hidden" name="courseId" value={courseId} /><input type="hidden" name="studentId" value={studentId ?? ""} /><button class="button button-small" type="submit">Mark complete</button></form>}
+                  {lesson.progress_status === "completed" && <strong class="complete-label">✓ Complete</strong>}
+                </div>
+              </article>;
+            })}
+          </div>
+        </section>
+      ))}
+      {data.flashcardDecks.filter((deck) => !deck.lesson_id).map((deck) => <a class="panel activity-link" href={`/flashcards/${deck.id}${studentQuery}`}><span class="eyebrow">Flashcards</span><h3>{deck.title}</h3><p>{deck.description}</p></a>)}
+    </main>
+  </section>
+</BaseLayout>

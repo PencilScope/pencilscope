@@ -4,9 +4,22 @@ import { sampleCourses, type CourseSummary } from "@/lib/courses";
 type CourseListResponse = { courses: CourseSummary[] };
 type CourseResponse = { course: CourseSummary };
 
-async function requestApi(path: string): Promise<Response> {
+export type ApiRequestOptions = {
+  userId?: string;
+  method?: string;
+  body?: unknown;
+};
+
+export async function requestApi(path: string, options: ApiRequestOptions = {}): Promise<Response> {
   const env = cloudflareEnv as unknown as AppEnvironment;
-  return env.API.fetch(new Request(`https://pencilscope-api.internal${path}`));
+  const headers = new Headers();
+  if (options.userId) headers.set("x-pencilscope-user-id", options.userId);
+  if (options.body !== undefined) headers.set("content-type", "application/json");
+  return env.API.fetch(new Request(`https://pencilscope-api.internal${path}`, {
+    method: options.method ?? "GET",
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+  }));
 }
 
 export async function listPublishedCourses(): Promise<CourseSummary[]> {

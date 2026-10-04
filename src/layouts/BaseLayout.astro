@@ -1,10 +1,12 @@
 ---
 import "@/styles/global.css";
+import "@/styles/journeys.css";
 type Props = { title?: string; description?: string };
 const {
   title = "PencilScope — Learn brightly",
   description = "Trusted online tuition and guided learning for Singapore primary students."
 } = Astro.props;
+const signedIn = typeof await Astro.session?.get("userId") === "string";
 ---
 
 <!doctype html>
@@ -24,7 +26,17 @@ const {
       <div class="shell nav-wrap">
         <a class="brand" href="/" aria-label="PencilScope home"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span>PencilScope</span></a>
         <nav aria-label="Primary navigation"><a href="/courses">Explore courses</a><a href="/#how-it-works">How it works</a><a href="/#for-tutors">For tutors</a></nav>
-        <div class="nav-actions"><a class="login-link" href="/sign-in">Sign in</a><a class="button button-small" href="/courses">Start learning</a></div>
+        <div class="nav-actions">
+          {signedIn ? (
+            <>
+              <a class="login-link" href="/dashboard">Dashboard</a>
+              <form action="/api/auth/logout" method="post"><button class="link-button" type="submit">Sign out</button></form>
+            </>
+          ) : (
+            <a class="login-link" href="/sign-in">Sign in</a>
+          )}
+          <a class="button button-small" href="/courses">Start learning</a>
+        </div>
       </div>
     </header>
     <main><slot /></main>
