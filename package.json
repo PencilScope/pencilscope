@@ -17,11 +17,14 @@
     "deploy": "pnpm build && wrangler deploy",
     "deploy:uat": "node scripts/cloudflare-environment.mjs uat deploy",
     "deploy:production": "node scripts/cloudflare-environment.mjs production deploy",
+    "api:dev": "wrangler dev --config workers/api/wrangler.jsonc --env-file .dev.vars",
+    "api:deploy:uat": "wrangler deploy --config workers/api/wrangler.jsonc --env uat",
+    "api:deploy:production": "wrangler deploy --config workers/api/wrangler.jsonc --env production",
     "cf-types": "wrangler types",
-    "db:migrate:local": "wrangler d1 migrations apply DB --local",
-    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
-    "db:migrate:uat": "wrangler d1 migrations apply DB --remote --env uat",
-    "db:migrate:production": "wrangler d1 migrations apply DB --remote --env production"
+    "db:migrate:local": "wrangler d1 migrations apply DB --local --config workers/api/wrangler.jsonc",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote --config workers/api/wrangler.jsonc",
+    "db:migrate:uat": "wrangler d1 migrations apply DB --remote --config workers/api/wrangler.jsonc --env uat",
+    "db:migrate:production": "wrangler d1 migrations apply DB --remote --config workers/api/wrangler.jsonc --env production"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^14.3.3",

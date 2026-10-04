@@ -1,11 +1,8 @@
 ---
 import CourseCard from "@/components/CourseCard.astro";
 import BaseLayout from "@/layouts/BaseLayout.astro";
-import { listPublishedCourses } from "@/lib/courses";
-import { getEnv } from "@/lib/runtime";
-let db: D1Database | undefined;
-try { db = getEnv(Astro.locals).DB; } catch { db = undefined; }
-const courses = await listPublishedCourses(db);
+import { listPublishedCourses } from "@/lib/api-client";
+const courses = await listPublishedCourses();
 ---
 
 <BaseLayout title="Explore courses — PencilScope" description="Explore trusted primary-school tuition courses for Singapore learners.">
@@ -15,4 +12,3 @@ const courses = await listPublishedCourses(db);
     <div class="course-grid">{courses.map((course) => <CourseCard course={course} />)}</div>
   </section>
 </BaseLayout>
-

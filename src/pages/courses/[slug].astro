@@ -1,10 +1,8 @@
 ---
 import BaseLayout from "@/layouts/BaseLayout.astro";
-import { findCourseBySlug, formatPrice } from "@/lib/courses";
-import { getEnv } from "@/lib/runtime";
-let db: D1Database | undefined;
-try { db = getEnv(Astro.locals).DB; } catch { db = undefined; }
-const course = await findCourseBySlug(Astro.params.slug ?? "", db);
+import { findCourseBySlug } from "@/lib/api-client";
+import { formatPrice } from "@/lib/courses";
+const course = await findCourseBySlug(Astro.params.slug ?? "");
 if (!course) return Astro.redirect("/404");
 ---
 
@@ -17,4 +15,3 @@ if (!course) return Astro.redirect("/404");
   </section>
   <section class="shell detail-content"><article><span class="eyebrow">What they’ll learn</span><h2>Confidence, one clear step at a time</h2><p>This starter course page is connected to the course catalogue and commerce API. Lesson plans, tutor previews and outcomes will be loaded from D1 as the authoring workflow is implemented.</p></article><aside><strong>Built for young learners</strong><p>Short sessions, accessible design and parent-guided access are part of every PencilScope learning path.</p></aside></section>
 </BaseLayout>
-

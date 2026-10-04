@@ -2,7 +2,12 @@ import { Resend } from "resend";
 
 export type EmailMessage = { to: string; subject: string; html: string };
 
-export async function sendEmail(env: AppEnvironment, message: EmailMessage): Promise<string> {
+export type EmailEnvironment = {
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
+};
+
+export async function sendEmail(env: EmailEnvironment, message: EmailMessage): Promise<string> {
   if (!env.RESEND_API_KEY) throw new Error("RESEND_API_KEY is not configured");
   const resend = new Resend(env.RESEND_API_KEY);
   const result = await resend.emails.send({
@@ -15,4 +20,3 @@ export async function sendEmail(env: AppEnvironment, message: EmailMessage): Pro
   if (!result.data?.id) throw new Error("Resend did not return a message ID");
   return result.data.id;
 }
-

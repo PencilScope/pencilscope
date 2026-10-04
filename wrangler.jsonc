@@ -17,84 +17,36 @@
 		"APP_URL": "http://localhost:4321",
 		"ENVIRONMENT": "development"
 	},
-	"d1_databases": [
+	"services": [
 		{
-			"binding": "DB",
-			"database_name": "pencilscope-db-local",
-			"database_id": "8485d16d-3231-4385-9bbf-c51b4d699522",
-			"migrations_dir": "migrations"
+			"binding": "API",
+			"service": "pencilscope-api"
 		}
 	],
-	"r2_buckets": [
-		{
-			"binding": "MEDIA",
-			"bucket_name": "pencilscope-media"
-		}
-	],
-	"queues": {
-		"producers": [
-			{
-				"binding": "JOBS",
-				"queue": "pencilscope-jobs"
-			}
-		]
-	},
 	"env": {
 		"uat": {
 			"vars": {
 				"APP_URL": "https://pencilscope-uat.rdproducts-adm1.workers.dev",
 				"ENVIRONMENT": "uat"
 			},
-			"d1_databases": [
+			"services": [
 				{
-					"binding": "DB",
-					"database_name": "pencilscope-db-uat",
-					"database_id": "75cb8b3f-33f9-4842-ad63-9d4f9ed32a4b",
-					"migrations_dir": "migrations"
+					"binding": "API",
+					"service": "pencilscope-api-uat"
 				}
-			],
-			"r2_buckets": [
-				{
-					"binding": "MEDIA",
-					"bucket_name": "pencilscope-media-uat"
-				}
-			],
-			"queues": {
-				"producers": [
-					{
-						"binding": "JOBS",
-						"queue": "pencilscope-jobs-uat"
-					}
-				]
-			}
+			]
 		},
 		"production": {
 			"vars": {
 				"APP_URL": "https://pencilscope-production.rdproducts-adm1.workers.dev",
 				"ENVIRONMENT": "production"
 			},
-			"d1_databases": [
+			"services": [
 				{
-					"binding": "DB",
-					"database_name": "pencilscope-db-production",
-					"database_id": "5a759f23-f07d-455a-b3f6-a5e458eac229",
-					"migrations_dir": "migrations"
+					"binding": "API",
+					"service": "pencilscope-api-production"
 				}
-			],
-			"r2_buckets": [
-				{
-					"binding": "MEDIA",
-					"bucket_name": "pencilscope-media-production"
-				}
-			],
-			"queues": {
-				"producers": [
-					{
-						"binding": "JOBS",
-						"queue": "pencilscope-jobs-production"
-					}
-				]
-			}
+			]
 		}
 	}
 }

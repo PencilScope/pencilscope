@@ -14,6 +14,14 @@ export async function getTutorActor(
   const userId = await session?.get("userId");
   if (typeof userId !== "string" || !userId) return null;
 
+  return getTutorActorById(userId, db);
+}
+
+export async function getTutorActorById(
+  userId: string | null,
+  db: D1Database
+): Promise<AuthenticatedActor | null> {
+  if (!userId) return null;
   const user = await db.prepare(
     `SELECT u.id, u.role, u.status, tp.verification_status
      FROM users u
@@ -33,4 +41,3 @@ export async function getTutorActor(
   }
   return null;
 }
-

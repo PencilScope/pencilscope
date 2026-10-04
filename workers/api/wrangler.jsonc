@@ -1,0 +1,99 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"name": "pencilscope-api",
+	"main": "./src/index.ts",
+	"compatibility_date": "2026-10-04",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": false,
+	"observability": {
+		"enabled": true
+	},
+	"vars": {
+		"APP_URL": "http://localhost:4321",
+		"ENVIRONMENT": "development"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "pencilscope-db-local",
+			"database_id": "8485d16d-3231-4385-9bbf-c51b4d699522",
+			"migrations_dir": "../../migrations"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "MEDIA",
+			"bucket_name": "pencilscope-media"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "JOBS",
+				"queue": "pencilscope-jobs"
+			}
+		]
+	},
+	"env": {
+		"uat": {
+			"workers_dev": false,
+			"vars": {
+				"APP_URL": "https://pencilscope-uat.rdproducts-adm1.workers.dev",
+				"ENVIRONMENT": "uat"
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "pencilscope-db-uat",
+					"database_id": "75cb8b3f-33f9-4842-ad63-9d4f9ed32a4b",
+					"migrations_dir": "../../migrations"
+				}
+			],
+			"r2_buckets": [
+				{
+					"binding": "MEDIA",
+					"bucket_name": "pencilscope-media-uat"
+				}
+			],
+			"queues": {
+				"producers": [
+					{
+						"binding": "JOBS",
+						"queue": "pencilscope-jobs-uat"
+					}
+				]
+			}
+		},
+		"production": {
+			"workers_dev": false,
+			"vars": {
+				"APP_URL": "https://pencilscope-production.rdproducts-adm1.workers.dev",
+				"ENVIRONMENT": "production"
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "pencilscope-db-production",
+					"database_id": "5a759f23-f07d-455a-b3f6-a5e458eac229",
+					"migrations_dir": "../../migrations"
+				}
+			],
+			"r2_buckets": [
+				{
+					"binding": "MEDIA",
+					"bucket_name": "pencilscope-media-production"
+				}
+			],
+			"queues": {
+				"producers": [
+					{
+						"binding": "JOBS",
+						"queue": "pencilscope-jobs-production"
+					}
+				]
+			}
+		}
+	}
+}

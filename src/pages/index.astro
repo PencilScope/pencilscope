@@ -1,12 +1,9 @@
 ---
 import CourseCard from "@/components/CourseCard.astro";
 import BaseLayout from "@/layouts/BaseLayout.astro";
-import { listPublishedCourses } from "@/lib/courses";
-import { getEnv } from "@/lib/runtime";
+import { listPublishedCourses } from "@/lib/api-client";
 
-let db: D1Database | undefined;
-try { db = getEnv(Astro.locals).DB; } catch { db = undefined; }
-const courses = (await listPublishedCourses(db)).slice(0, 3);
+const courses = (await listPublishedCourses()).slice(0, 3);
 ---
 
 <BaseLayout>
@@ -51,4 +48,3 @@ const courses = (await listPublishedCourses(db)).slice(0, 3);
     </div>
   </section>
 </BaseLayout>
-
