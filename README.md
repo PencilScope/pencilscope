@@ -25,11 +25,35 @@ Requirements: Node.js 22.12 or newer and pnpm.
 
 The catalogue renders sample content before D1 is initialised. Checkout requires migrated D1 data, a Stripe test secret and Stripe price IDs added to course records.
 
-## Cloudflare setup
+## Cloudflare environments
 
-Create the D1 database, R2 bucket and Queue named in `wrangler.jsonc`, then replace the placeholder D1 `database_id`. Store production secrets with Wrangler rather than committing them: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `RESEND_API_KEY`, and `EMAIL_FROM`.
+The repository has two isolated named Cloudflare environments:
 
-Configure Stripe to send events to `/api/webhooks/stripe` and set `APP_URL` to the production origin.
+| Git branch | Worker | D1 | R2 | Queue |
+| --- | --- | --- | --- | --- |
+| `uat` | `pencilscope-uat` | `pencilscope-db-uat` | `pencilscope-media-uat` | `pencilscope-jobs-uat` |
+| `production` | `pencilscope-production` | `pencilscope-db-production` | `pencilscope-media-production` | `pencilscope-jobs-production` |
+
+Use `pnpm db:migrate:uat` and `pnpm deploy:uat` for UAT. Use `pnpm db:migrate:production` and `pnpm deploy:production` for production. The build commands select the matching Wrangler environment before Astro generates its deployment manifest.
+
+Store secrets separately in each environment; never commit them:
+
+```powershell
+pnpm exec wrangler secret put STRIPE_SECRET_KEY --env uat
+pnpm exec wrangler secret put STRIPE_WEBHOOK_SECRET --env uat
+pnpm exec wrangler secret put RESEND_API_KEY --env uat
+pnpm exec wrangler secret put EMAIL_FROM --env uat
+
+pnpm exec wrangler secret put STRIPE_SECRET_KEY --env production
+pnpm exec wrangler secret put STRIPE_WEBHOOK_SECRET --env production
+pnpm exec wrangler secret put RESEND_API_KEY --env production
+pnpm exec wrangler secret put EMAIL_FROM --env production
+```
+
+Configure separate Stripe webhook endpoints for:
+
+- `https://pencilscope-uat.rdproducts-adm1.workers.dev/api/webhooks/stripe`
+- `https://pencilscope-production.rdproducts-adm1.workers.dev/api/webhooks/stripe`
 
 ## Current boundary
 

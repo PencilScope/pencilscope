@@ -10,12 +10,18 @@
   "scripts": {
     "dev": "astro dev",
     "build": "astro build",
+    "build:uat": "node scripts/cloudflare-environment.mjs uat build",
+    "build:production": "node scripts/cloudflare-environment.mjs production build",
     "check": "astro check",
     "preview": "astro preview",
     "deploy": "pnpm build && wrangler deploy",
+    "deploy:uat": "node scripts/cloudflare-environment.mjs uat deploy",
+    "deploy:production": "node scripts/cloudflare-environment.mjs production deploy",
     "cf-types": "wrangler types",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
-    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "db:migrate:uat": "wrangler d1 migrations apply DB --remote --env uat",
+    "db:migrate:production": "wrangler d1 migrations apply DB --remote --env production"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^14.3.3",
