@@ -13,7 +13,8 @@ type UserRow = {
 };
 
 const encoder = new TextEncoder();
-const passwordIterations = 210_000;
+// Cloudflare Workers Web Crypto currently caps PBKDF2 at 100,000 iterations.
+const passwordIterations = 100_000;
 
 function userIdFrom(request: Request): string | null {
   return request.headers.get("x-pencilscope-user-id")?.trim() || null;

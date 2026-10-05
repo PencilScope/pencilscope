@@ -38,6 +38,8 @@ Requirements: Node.js 22.12 or newer and pnpm.
 
 The catalogue renders sample content before D1 is initialised. Publishing a paid offering from the creator studio creates or reuses the course's Stripe Product and creates an immutable one-time Price for that offering. Checkout requires migrated D1 data and Stripe test credentials.
 
+Password credentials use PBKDF2-SHA-256 with a unique salt and 100,000 iterations, the maximum currently supported by Cloudflare Workers Web Crypto.
+
 ## Cloudflare environments
 
 The repository has two isolated named Cloudflare environments. Each environment contains a public Astro web Worker and a private API Worker:
