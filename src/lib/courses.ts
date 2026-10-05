@@ -101,12 +101,14 @@ export async function listPublishedCourses(db?: D1Database): Promise<CourseSumma
           COALESCE((SELECT MIN(o.price_cents) FROM course_offerings o
             WHERE o.course_id = c.id AND o.status = 'published'), c.price_cents) AS price_cents,
           c.currency, c.accent, c.stripe_price_id,
-          COALESCE(u.display_name, tp.display_name, 'PencilScope Creator') AS tutor_name,
+          COALESCE(ap.organization_name, cp.public_name, u.display_name, tp.display_name, 'PencilScope Creator') AS tutor_name,
           COALESCE((SELECT GROUP_CONCAT(cc.title, '|') FROM course_category_links cl
             JOIN course_categories cc ON cc.id = cl.category_id
             WHERE cl.course_id = c.id AND cc.active = 1), '') AS categories
         FROM courses c
         LEFT JOIN users u ON u.id = c.tutor_id
+        LEFT JOIN account_profiles ap ON ap.user_id = c.tutor_id
+        LEFT JOIN creator_profiles cp ON cp.user_id = c.tutor_id
         LEFT JOIN tutor_profiles tp ON tp.user_id = c.tutor_id
         WHERE c.status = 'published'
         ORDER BY c.published_at DESC, c.created_at DESC`

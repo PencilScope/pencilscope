@@ -14,7 +14,7 @@ PencilScope is an open learning marketplace for recorded courses, live online le
 - Private API Worker connected to the Astro web Worker with a Service Binding
 - API-owned R2, Queue, D1, Stripe and Resend bindings
 - Health endpoint at `/api/health`
-- Parent and creator registration with session-backed sign-in
+- Individual and Organisation registration with session-backed sign-in
 - Parent-managed learner profiles and role-aware dashboards
 - Stripe payment-to-enrolment entitlement assignment
 - Protected course modules, lessons and progress tracking
@@ -71,6 +71,13 @@ Configure separate Stripe webhook endpoints for:
 - `https://pencilscope-production.rdproducts-adm1.workers.dev/api/webhooks/stripe`
 
 ## Learning journeys
+
+### Accounts and capabilities
+
+- **Individual** accounts can purchase and access learning for themselves, manage linked learner profiles, and create courses.
+- **Organisation** accounts publish courses under an organisation name and do not hold learner entitlements.
+- **Creator** is a capability, not an exclusive account type. Course ownership and collaboration live in `course_members`, while public creator and future payout state live in `creator_profiles`.
+- The legacy `users.role` values remain internally for backward compatibility. Product behaviour uses `account_profiles.account_type` instead.
 
 ### Parent and student
 

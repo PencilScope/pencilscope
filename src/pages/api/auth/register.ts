@@ -10,7 +10,8 @@ export const POST: APIRoute = async ({ request, locals, session, redirect }) => 
       displayName: form.get("displayName"),
       email: form.get("email"),
       password: form.get("password"),
-      role: form.get("role")
+      accountType: form.get("accountType"),
+      organizationName: form.get("organizationName")
     })
   });
   const result = await response.json<{ user?: { id: string }; error?: { message?: string } }>();

@@ -106,22 +106,25 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
   const actorId = authenticatedUserId(request);
   if (!actorId) return problem(401, "authentication_required", "Sign in before enrolling.");
   const actor = await env.DB.prepare(
-    "SELECT id, role FROM users WHERE id = ? AND status = 'active'"
-  ).bind(actorId).first<{ id: string; role: string }>();
+    `SELECT u.id, u.role, COALESCE(ap.account_type, 'individual') AS account_type
+     FROM users u LEFT JOIN account_profiles ap ON ap.user_id = u.id
+     WHERE u.id = ? AND u.status = 'active'`
+  ).bind(actorId).first<{ id: string; role: string; account_type: "individual" | "organization" }>();
   if (!actor) return problem(401, "authentication_required", "Sign in before enrolling.");
+  if (actor.account_type !== "individual") {
+    return problem(403, "individual_required", "Use an Individual account to enrol in a course.");
+  }
   let studentId: string;
   let parentUserId: string | null = null;
-  if (actor.role === "student") {
+  if (typeof requestedStudentId !== "string" || !requestedStudentId || requestedStudentId === actor.id) {
     studentId = actor.id;
-  } else if (actor.role === "parent" && typeof requestedStudentId === "string" && requestedStudentId) {
+  } else {
     const linked = await env.DB.prepare(
       "SELECT 1 FROM parent_student_relationships WHERE parent_user_id = ? AND student_user_id = ?"
     ).bind(actor.id, requestedStudentId).first();
     if (!linked) return problem(403, "student_forbidden", "Choose a student linked to your account.");
     studentId = requestedStudentId;
     parentUserId = actor.id;
-  } else {
-    return problem(403, "student_required", "Choose a linked student for this enrolment.");
   }
 
   const course = await env.DB.prepare(

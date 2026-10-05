@@ -24,17 +24,18 @@ const lowestPrice = offerings.length
   : course.priceCents;
 const userId = await Astro.session?.get("userId");
 let viewer: {
-  role: string;
+  id: string;
+  accountType: "individual" | "organization";
   students: Array<{ id: string; display_name: string; primary_level: string | null }>;
 } | null = null;
 if (typeof userId === "string") {
   const dashboard = await requestApi("/api/dashboard", { userId });
   if (dashboard.ok) {
     const data = await dashboard.json<{
-      user: { role: string };
+      user: { id: string; account_type: "individual" | "organization" };
       students?: Array<{ id: string; display_name: string; primary_level: string | null }>;
     }>();
-    viewer = { role: data.user.role, students: data.students ?? [] };
+    viewer = { id: data.user.id, accountType: data.user.account_type, students: data.students ?? [] };
   }
 }
 const checkoutMessage = Astro.url.searchParams.get("error");
@@ -44,20 +45,19 @@ const checkoutSuccess = Astro.url.searchParams.get("checkout") === "success";
 <BaseLayout title={`${course.title} — PencilScope`} description={course.description}>
   <section class="course-detail-hero">
     <div class="shell detail-grid">
-      <div><a class="back-link" href="/courses">← All courses</a><div class="detail-tags"><span>{course.subject}</span><span>{course.level}</span><span>{course.deliveryMode}</span></div><h1>{course.title}</h1><p>{course.description}</p><div class="tutor-line"><span class="tutor-avatar">{course.tutorName.split(" ").at(-1)?.slice(0, 1)}</span><span>Designed and taught by <strong>{course.tutorName}</strong></span></div></div>
+      <div><a class="back-link" href="/courses">← All courses</a><div class="detail-tags">{course.categories.map((category) => <span>{category}</span>)}<span>{course.subject}</span><span>{course.level}</span><span>{course.deliveryMode}</span></div><h1>{course.title}</h1><p>{course.description}</p><div class="tutor-line"><span class="tutor-avatar">{course.tutorName.split(" ").at(-1)?.slice(0, 1)}</span><span>Created by <strong>{course.tutorName}</strong></span></div></div>
       <aside class="enrol-card"><div class={`enrol-art accent-${course.accent}`}><span>{course.subject.slice(0, 1)}</span></div><div class="enrol-body"><span class="price-label">{offerings.length > 1 ? "Access from" : "Course access"}</span><strong class="detail-price">{formatPrice(lowestPrice, course.currency)}</strong><ul><li>Recorded, live online or in-person delivery</li><li>Materials and knowledge checks</li><li>Progress visible from the dashboard</li><li>Secure access to the purchased offering</li></ul>
         {checkoutMessage && <p class="form-error">{checkoutMessage}</p>}
         {checkoutSuccess && <p class="form-success">Payment received. Course access will appear on your dashboard as soon as Stripe confirms it.</p>}
         {!viewer && <a class="button button-full" href={`/sign-in?next=/courses/${course.slug}`}>Sign in to enrol</a>}
-        {viewer?.role === "parent" && viewer.students.length === 0 && <><p>Add a learner profile before enrolling.</p><a class="button button-full" href="/dashboard">Add learner</a></>}
         {bookableOfferings.length === 0 && <p class="form-message">No offering is currently open for enrolment.</p>}
-        {bookableOfferings.length > 0 && viewer && (viewer.role === "student" || (viewer.role === "parent" && viewer.students.length > 0)) && <form class="stack-form checkout-form" action="/api/checkout" method="post">
+        {bookableOfferings.length > 0 && viewer?.accountType === "individual" && <form class="stack-form checkout-form" action="/api/checkout" method="post">
           <input type="hidden" name="courseId" value={course.id} /><input type="hidden" name="returnTo" value={`/courses/${course.slug}`} />
           <label>Course offering<select name="offeringId" required>{bookableOfferings.map((offering) => <option value={offering.id}>{offering.title} · {formatPrice(offering.price_cents, offering.currency)}</option>)}</select></label>
-          {viewer.role === "parent" && <label>Enrol learner<select name="studentId" required><option value="">Choose a learner</option>{viewer.students.map((student) => <option value={student.id}>{student.display_name} · {student.primary_level}</option>)}</select></label>}
+          <label>Access for<select name="studentId" required><option value={viewer.id}>Myself</option>{viewer.students.map((student) => <option value={student.id}>{student.display_name} · {student.primary_level}</option>)}</select></label>
           <button class="button button-full" type="submit">Continue to secure checkout</button>
         </form>}
-        {viewer && !["parent", "student"].includes(viewer.role) && <p class="form-message">Course purchases are available to parent and student accounts.</p>}
+        {viewer?.accountType === "organization" && <p class="form-message">Use an Individual account to purchase learner access.</p>}
         <small>Secure checkout powered by Stripe</small></div></aside>
     </div>
   </section>

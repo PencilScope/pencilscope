@@ -8,6 +8,8 @@ type UserRow = {
   display_name: string;
   role: "parent" | "student" | "tutor" | "admin";
   status: string;
+  account_type: "individual" | "organization";
+  organization_name: string | null;
 };
 
 const encoder = new TextEncoder();
@@ -21,7 +23,11 @@ async function currentUser(request: Request, env: ApiEnvironment): Promise<UserR
   const id = userIdFrom(request);
   if (!id) return null;
   return env.DB.prepare(
-    "SELECT id, email, display_name, role, status FROM users WHERE id = ? AND status = 'active'"
+    `SELECT u.id, u.email, u.display_name, u.role, u.status,
+      COALESCE(ap.account_type, 'individual') AS account_type,
+      ap.organization_name
+     FROM users u LEFT JOIN account_profiles ap ON ap.user_id = u.id
+     WHERE u.id = ? AND u.status = 'active'`
   ).bind(id).first<UserRow>();
 }
 
@@ -81,10 +87,14 @@ async function register(request: Request, env: ApiEnvironment): Promise<Response
   const displayName = text(input?.displayName, 2, 80);
   const email = text(input?.email, 5, 254)?.toLowerCase();
   const password = text(input?.password, 10, 128);
-  const role = input?.role === "tutor" ? "tutor" : input?.role === "parent" ? "parent" : null;
-  if (!displayName || !email || !email.includes("@") || !password || !role) {
-    return problem(400, "invalid_registration", "Provide a name, valid email, password of at least 10 characters, and parent or tutor role.");
+  const accountType = input?.accountType === "organization" || input?.role === "tutor"
+    ? "organization" : input?.accountType === "individual" || input?.role === "parent" ? "individual" : null;
+  const organizationName = accountType === "organization" ? text(input?.organizationName, 2, 160) : null;
+  if (!displayName || !email || !email.includes("@") || !password || !accountType ||
+      (accountType === "organization" && !organizationName)) {
+    return problem(400, "invalid_registration", "Provide a name, valid email, password of at least 10 characters, and an Individual or Organisation account type.");
   }
+  const role = accountType === "organization" ? "tutor" : "parent";
 
   const existing = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
   if (existing) return problem(409, "email_registered", "An account already exists for this email.");
@@ -99,7 +109,17 @@ async function register(request: Request, env: ApiEnvironment): Promise<Response
     ).bind(id, email, displayName, role, now, now),
     env.DB.prepare(
       "INSERT INTO user_credentials (user_id, password_hash, password_salt, password_iterations, created_at) VALUES (?, ?, ?, ?, ?)"
-    ).bind(id, hash, encodeBase64(salt), passwordIterations, now)
+    ).bind(id, hash, encodeBase64(salt), passwordIterations, now),
+    env.DB.prepare(
+      `INSERT INTO account_profiles
+        (user_id, account_type, organization_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).bind(id, accountType, organizationName, now, now),
+    env.DB.prepare(
+      `INSERT INTO creator_profiles
+        (user_id, public_name, biography, verification_status, payout_status, created_at, updated_at)
+       VALUES (?, ?, '', 'unverified', 'not_configured', ?, ?)`
+    ).bind(id, organizationName ?? displayName, now, now)
   ];
   if (role === "tutor") {
     statements.push(env.DB.prepare(
@@ -108,8 +128,7 @@ async function register(request: Request, env: ApiEnvironment): Promise<Response
   }
   await env.DB.batch(statements);
   return json({
-    user: { id, email, displayName, role },
-    tutorVerification: role === "tutor" ? "pending" : undefined
+    user: { id, email, displayName, role, accountType, organizationName }
   }, { status: 201 });
 }
 
@@ -121,8 +140,10 @@ async function login(request: Request, env: ApiEnvironment): Promise<Response> {
 
   const account = await env.DB.prepare(
     `SELECT u.id, u.email, u.display_name, u.role, u.status,
+      COALESCE(ap.account_type, 'individual') AS account_type, ap.organization_name,
       c.password_hash, c.password_salt, c.password_iterations
-     FROM users u JOIN user_credentials c ON c.user_id = u.id WHERE u.email = ?`
+     FROM users u JOIN user_credentials c ON c.user_id = u.id
+     LEFT JOIN account_profiles ap ON ap.user_id = u.id WHERE u.email = ?`
   ).bind(email).first<UserRow & {
     password_hash: string;
     password_salt: string;
@@ -142,21 +163,26 @@ async function login(request: Request, env: ApiEnvironment): Promise<Response> {
     id: account.id,
     email: account.email,
     displayName: account.display_name,
-    role: account.role
+    role: account.role,
+    accountType: account.account_type,
+    organizationName: account.organization_name
   } });
 }
 
 async function me(request: Request, env: ApiEnvironment): Promise<Response> {
   const user = await currentUser(request, env);
   return user
-    ? json({ user: { id: user.id, email: user.email, displayName: user.display_name, role: user.role } })
+    ? json({ user: {
+        id: user.id, email: user.email, displayName: user.display_name, role: user.role,
+        accountType: user.account_type, organizationName: user.organization_name
+      } })
     : problem(401, "authentication_required", "Sign in to continue.");
 }
 
 async function parentStudents(request: Request, env: ApiEnvironment): Promise<Response> {
   const parent = await currentUser(request, env);
-  if (!parent || parent.role !== "parent") {
-    return problem(403, "parent_required", "A parent account is required.");
+  if (!parent || parent.account_type !== "individual") {
+    return problem(403, "individual_required", "An Individual account is required to manage learners.");
   }
   if (request.method === "GET") {
     const result = await env.DB.prepare(
@@ -190,6 +216,11 @@ async function parentStudents(request: Request, env: ApiEnvironment): Promise<Re
       "INSERT INTO student_profiles (user_id, primary_level, managed_by_parent, created_at, updated_at) VALUES (?, ?, 1, ?, ?)"
     ).bind(id, primaryLevel, now, now),
     env.DB.prepare(
+      `INSERT INTO account_profiles
+        (user_id, account_type, organization_name, created_at, updated_at)
+       VALUES (?, 'individual', NULL, ?, ?)`
+    ).bind(id, now, now),
+    env.DB.prepare(
       "INSERT INTO parent_student_relationships (parent_user_id, student_user_id, relationship, permissions_json, created_at) VALUES (?, ?, 'guardian', ?, ?)"
     ).bind(parent.id, id, '{"purchase":true,"progress":true}', now)
   ]);
@@ -203,9 +234,11 @@ async function permittedStudent(
 ): Promise<{ actor: UserRow; studentId: string } | Response> {
   const actor = await currentUser(request, env);
   if (!actor) return problem(401, "authentication_required", "Sign in to continue.");
-  if (actor.role === "student") return { actor, studentId: actor.id };
-  if (actor.role !== "parent" || !requestedStudentId) {
-    return problem(403, "student_access_required", "Choose a linked student.");
+  if (actor.account_type !== "individual") {
+    return problem(403, "individual_required", "Organisation accounts cannot access learner content.");
+  }
+  if (!requestedStudentId || requestedStudentId === actor.id || actor.role === "student") {
+    return { actor, studentId: actor.id };
   }
   const relationship = await env.DB.prepare(
     "SELECT 1 FROM parent_student_relationships WHERE parent_user_id = ? AND student_user_id = ?"
@@ -229,15 +262,17 @@ async function dashboard(request: Request, env: ApiEnvironment): Promise<Respons
        GROUP BY c.id ORDER BY c.updated_at DESC`
     ).bind(actor.id, actor.role, actor.id).all();
 
-  const students = actor.role === "parent"
+  const students = actor.account_type === "individual"
     ? (await env.DB.prepare(
         `SELECT u.id, u.display_name, sp.primary_level
          FROM parent_student_relationships ps JOIN users u ON u.id = ps.student_user_id
          LEFT JOIN student_profiles sp ON sp.user_id = u.id
          WHERE ps.parent_user_id = ? ORDER BY u.display_name`
       ).bind(actor.id).all()).results
-    : actor.role === "student" ? [{ id: actor.id, display_name: actor.display_name, primary_level: null }] : [];
-  const studentIds = students.map((student) => String(student.id));
+    : [];
+  const studentIds = actor.account_type === "individual"
+    ? [actor.id, ...students.map((student) => String(student.id))]
+    : [];
   let enrolments: unknown[] = [];
   if (studentIds.length) {
     const placeholders = studentIds.map(() => "?").join(",");
@@ -255,7 +290,16 @@ async function dashboard(request: Request, env: ApiEnvironment): Promise<Respons
        GROUP BY eo.id ORDER BY eo.enrolled_at DESC`
     ).bind(...studentIds).all()).results;
   }
-  return json({ user: actor, students, enrolments, creatorCourses: creatorCourses.results, tutorCourses: creatorCourses.results });
+  return json({
+    user: actor,
+    selfLearner: actor.account_type === "individual"
+      ? { id: actor.id, display_name: actor.display_name, primary_level: null }
+      : null,
+    students,
+    enrolments,
+    creatorCourses: creatorCourses.results,
+    tutorCourses: creatorCourses.results
+  });
 }
 
 async function activeEnrolment(

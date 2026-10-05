@@ -48,7 +48,7 @@ const studentQuery = studentId ? `?studentId=${encodeURIComponent(studentId)}` :
               const deck = data.flashcardDecks.find((item) => item.lesson_id === lesson.id);
               return <article class:list={["lesson-row", { complete: lesson.progress_status === "completed" }]}>
                 <div class="lesson-kind">{lesson.delivery_mode.replace("_", " ")}</div>
-                <div><h3>{lesson.title}</h3><p>{content.summary ?? "Tutor-guided learning activity."}</p><small>{lesson.estimated_minutes ? `${lesson.estimated_minutes} min` : "Self-paced"} · {lesson.progress_status}</small></div>
+                <div><h3>{lesson.title}</h3><p>{content.summary ?? "Creator-guided learning activity."}</p><small>{lesson.estimated_minutes ? `${lesson.estimated_minutes} min` : "Self-paced"} · {lesson.progress_status}</small></div>
                 <div class="lesson-actions">
                   {assessment && <a class="button button-small" href={`/assessment/${assessment.id}${studentQuery}`}>Start {assessment.assessment_type.replace("_", " ")}</a>}
                   {deck && <a class="button button-small" href={`/flashcards/${deck.id}${studentQuery}`}>Study cards</a>}
