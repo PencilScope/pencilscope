@@ -12,9 +12,10 @@ if (response.status === 403) return Astro.redirect("/dashboard?error=Course%20ac
 if (!response.ok) return Astro.redirect("/404");
 const data = await response.json<{
   course: { id: string; title: string; description: string; subject: string; primary_level: string };
+  offerings: Array<{ id: string; title: string; offering_type: string; delivery_mode: string; academic_year: number; term_number: number }>;
   modules: Array<{ id: string; title: string; position: number }>;
   lessons: Array<{
-    id: string; module_id: string; title: string; lesson_type: string;
+    id: string; module_id: string; title: string; lesson_type: string; delivery_mode: string;
     content_json: string; estimated_minutes: number | null;
     progress_status: string; progress_percent: number;
   }>;
@@ -23,11 +24,18 @@ const data = await response.json<{
     time_limit_seconds: number | null; attempt_limit: number | null;
   }>;
   flashcardDecks: Array<{ id: string; lesson_id: string | null; title: string; description: string }>;
+  materials: Array<{ id: string; title: string; description: string; material_type: string }>;
+  sessions: Array<{
+    id: string; title: string; delivery_mode: string; starts_at: string; ends_at: string;
+    timezone: string; meeting_url: string | null; meeting_provider: string | null;
+    venue_name: string | null; address_line_1: string | null; address_line_2: string | null;
+    city: string | null; postal_code: string | null; arrival_instructions: string | null;
+  }>;
 }>();
 const studentQuery = studentId ? `?studentId=${encodeURIComponent(studentId)}` : "";
 ---
 <BaseLayout title={`${data.course.title} — Learning`}>
-  <section class="dashboard-hero learning-hero"><div class="shell"><a class="back-link" href="/dashboard">← Dashboard</a><span class="eyebrow">{data.course.subject} · {data.course.primary_level}</span><h1>{data.course.title}</h1><p>{data.course.description}</p></div></section>
+  <section class="dashboard-hero learning-hero"><div class="shell"><a class="back-link" href="/dashboard">← Dashboard</a><span class="eyebrow">{data.course.subject} · {data.course.primary_level}</span><h1>{data.course.title}</h1><p>{data.course.description}</p><div class="feature-pills">{data.offerings.map((offering) => <small>{offering.title}</small>)}</div></div></section>
   <section class="shell learning-layout">
     <main>
       {data.modules.map((module) => (
@@ -39,7 +47,7 @@ const studentQuery = studentId ? `?studentId=${encodeURIComponent(studentId)}` :
               const assessment = data.assessments.find((item) => item.lesson_id === lesson.id);
               const deck = data.flashcardDecks.find((item) => item.lesson_id === lesson.id);
               return <article class:list={["lesson-row", { complete: lesson.progress_status === "completed" }]}>
-                <div class="lesson-kind">{lesson.lesson_type}</div>
+                <div class="lesson-kind">{lesson.delivery_mode.replace("_", " ")}</div>
                 <div><h3>{lesson.title}</h3><p>{content.summary ?? "Tutor-guided learning activity."}</p><small>{lesson.estimated_minutes ? `${lesson.estimated_minutes} min` : "Self-paced"} · {lesson.progress_status}</small></div>
                 <div class="lesson-actions">
                   {assessment && <a class="button button-small" href={`/assessment/${assessment.id}${studentQuery}`}>Start {assessment.assessment_type.replace("_", " ")}</a>}
@@ -53,6 +61,8 @@ const studentQuery = studentId ? `?studentId=${encodeURIComponent(studentId)}` :
         </section>
       ))}
       {data.flashcardDecks.filter((deck) => !deck.lesson_id).map((deck) => <a class="panel activity-link" href={`/flashcards/${deck.id}${studentQuery}`}><span class="eyebrow">Flashcards</span><h3>{deck.title}</h3><p>{deck.description}</p></a>)}
+      {data.sessions.length > 0 && <section class="learning-module"><div class="module-heading"><span>◷</span><h2>Scheduled sessions</h2></div><div class="material-grid">{data.sessions.map((session) => <article class="panel material-card"><span>{session.delivery_mode.replace("_", " ")}</span><h3>{session.title}</h3><p>{new Date(session.starts_at).toLocaleString("en-SG", { dateStyle: "full", timeStyle: "short" })}</p>{session.delivery_mode === "live_online" && session.meeting_url ? <a class="button button-small" href={session.meeting_url} target="_blank" rel="noreferrer">Join online session</a> : <p><strong>{session.venue_name}</strong><br />{session.address_line_1}{session.postal_code ? ` · ${session.postal_code}` : ""}<br />{session.arrival_instructions}</p>}</article>)}</div></section>}
+      {data.materials.length > 0 && <section class="learning-module"><div class="module-heading"><span>+</span><h2>Course materials</h2></div><div class="material-grid">{data.materials.map((material) => <a class="panel material-card" href={`/api/materials/${material.id}${studentQuery}`} target="_blank"><span>{material.material_type}</span><h3>{material.title}</h3><p>{material.description}</p></a>)}</div></section>}
     </main>
   </section>
 </BaseLayout>

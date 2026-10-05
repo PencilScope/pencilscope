@@ -11,6 +11,7 @@ export type CourseSummary = {
   tutorName: string;
   accent: string;
   stripePriceId?: string;
+  categories: string[];
 };
 
 export const sampleCourses: CourseSummary[] = [
@@ -25,7 +26,8 @@ export const sampleCourses: CourseSummary[] = [
     priceCents: 8900,
     currency: "SGD",
     tutorName: "Ms Tan",
-    accent: "lime"
+    accent: "lime",
+    categories: ["Academic"]
   },
   {
     id: "course-science-4",
@@ -38,7 +40,8 @@ export const sampleCourses: CourseSummary[] = [
     priceCents: 12000,
     currency: "SGD",
     tutorName: "Mr Lim",
-    accent: "blue"
+    accent: "blue",
+    categories: ["Academic", "Enrichment"]
   },
   {
     id: "course-english-3",
@@ -51,7 +54,8 @@ export const sampleCourses: CourseSummary[] = [
     priceCents: 5900,
     currency: "SGD",
     tutorName: "Mrs Koh",
-    accent: "coral"
+    accent: "coral",
+    categories: ["Enrichment", "Personal development"]
   }
 ];
 
@@ -68,6 +72,7 @@ type CourseRow = {
   tutor_name: string;
   accent: string | null;
   stripe_price_id: string | null;
+  categories: string;
 };
 
 const mapCourse = (row: CourseRow): CourseSummary => ({
@@ -82,7 +87,8 @@ const mapCourse = (row: CourseRow): CourseSummary => ({
   currency: row.currency,
   tutorName: row.tutor_name,
   accent: row.accent ?? "lime",
-  stripePriceId: row.stripe_price_id ?? undefined
+  stripePriceId: row.stripe_price_id ?? undefined,
+  categories: row.categories ? row.categories.split("|") : []
 });
 
 export async function listPublishedCourses(db?: D1Database): Promise<CourseSummary[]> {
@@ -91,9 +97,16 @@ export async function listPublishedCourses(db?: D1Database): Promise<CourseSumma
     const result = await db
       .prepare(
         `SELECT c.id, c.slug, c.title, c.description, c.subject, c.primary_level,
-          c.delivery_mode, c.price_cents, c.currency, c.accent, c.stripe_price_id,
-          COALESCE(tp.display_name, 'PencilScope Tutor') AS tutor_name
+          c.delivery_mode,
+          COALESCE((SELECT MIN(o.price_cents) FROM course_offerings o
+            WHERE o.course_id = c.id AND o.status = 'published'), c.price_cents) AS price_cents,
+          c.currency, c.accent, c.stripe_price_id,
+          COALESCE(u.display_name, tp.display_name, 'PencilScope Creator') AS tutor_name,
+          COALESCE((SELECT GROUP_CONCAT(cc.title, '|') FROM course_category_links cl
+            JOIN course_categories cc ON cc.id = cl.category_id
+            WHERE cl.course_id = c.id AND cc.active = 1), '') AS categories
         FROM courses c
+        LEFT JOIN users u ON u.id = c.tutor_id
         LEFT JOIN tutor_profiles tp ON tp.user_id = c.tutor_id
         WHERE c.status = 'published'
         ORDER BY c.published_at DESC, c.created_at DESC`
@@ -117,4 +130,3 @@ export function formatPrice(cents: number, currency = "SGD"): string {
     maximumFractionDigits: 0
   }).format(cents / 100);
 }
-

@@ -8,16 +8,31 @@ const dashboardResponse = await requestApi("/api/dashboard", { userId });
 if (!dashboardResponse.ok) return Astro.redirect("/sign-in");
 const dashboard = await dashboardResponse.json<{
   user: { id: string; role: string; display_name: string };
-  tutorCourses?: Array<{ id: string; title: string; status: string; pricing_status: string }>;
+  creatorCourses?: Array<{ id: string; title: string; status: string; pricing_status: string }>;
 }>();
-if (!["tutor", "admin"].includes(dashboard.user.role)) return Astro.redirect("/dashboard");
 const selectedId = Astro.url.searchParams.get("courseId");
 let studio: {
   course: { id: string; title: string; status: string; pricing_status: string };
   modules: Array<{ id: string; title: string; position: number }>;
-  lessons: Array<{ id: string; module_id: string; title: string; lesson_type: string; position: number }>;
+  lessons: Array<{ id: string; module_id: string; title: string; lesson_type: string; delivery_mode: string; course_session_id: string | null; position: number }>;
   assessments: Array<{ id: string; title: string; assessment_type: string; status: string }>;
   flashcardDecks: Array<{ id: string; title: string; status: string }>;
+  offerings: Array<{
+    id: string; title: string; price_cents: number; currency: string; status: string;
+    pricing_status: string; academic_year: number; term_number: number;
+    offering_type: string; delivery_mode: string; starts_at: string | null; ends_at: string | null; capacity: number | null;
+  }>;
+  materials: Array<{ id: string; title: string; description: string; material_type: string; status: string }>;
+  offeringModules: Array<{ course_offering_id: string; module_id: string }>;
+  offeringAssessments: Array<{ course_offering_id: string; assessment_id: string }>;
+  offeringDecks: Array<{ course_offering_id: string; deck_id: string }>;
+  offeringMaterials: Array<{ course_offering_id: string; material_id: string }>;
+  categories: Array<{ id: string; slug: string; title: string; selected: number }>;
+  sessions: Array<{
+    id: string; course_offering_id: string; title: string; delivery_mode: string;
+    starts_at: string; ends_at: string; timezone: string; capacity: number | null;
+    meeting_url: string | null; venue_name: string | null; address_line_1: string | null;
+  }>;
 } | null = null;
 let studioError = "";
 if (selectedId) {
@@ -29,32 +44,36 @@ if (selectedId) {
     studioError = problem.error?.message ?? "The course studio is unavailable.";
   }
 }
+const requestedOfferingId = Astro.url.searchParams.get("offeringId");
+const selectedOfferingId = requestedOfferingId ?? studio?.offerings[0]?.id ?? "";
+const selectedOffering = studio?.offerings.find((offering) => offering.id === selectedOfferingId);
 ---
-<BaseLayout title="Tutor studio — PencilScope">
+<BaseLayout title="Creator studio — PencilScope">
   <section class="dashboard-hero"><div class="shell">
     <a class="back-link" href="/dashboard">← Dashboard</a>
-    <span class="eyebrow">Tutor studio</span><h1>Build a learning journey.</h1>
-    <p>Create the course first, then add lessons, assessments and flashcards. Publishing a course creates its Stripe product and price automatically.</p>
+    <span class="eyebrow">Creator studio</span><h1>Turn what you know into a course.</h1>
+    <p>Create self-paced training, a live cohort, an in-person event, or an academic term. Mix recorded lessons, online sessions, venues, materials and assessments.</p>
   </div></section>
   <section class="shell studio-layout">
     <aside class="panel studio-sidebar">
       <h2>Courses</h2>
       <nav>
-        {dashboard.tutorCourses?.map((course) => (
+        {dashboard.creatorCourses?.map((course) => (
           <a class:list={{ active: course.id === selectedId }} href={`/tutor?courseId=${course.id}`}>
             <strong>{course.title}</strong><small>{course.status} · {course.pricing_status}</small>
           </a>
         ))}
       </nav>
-      <details open={!dashboard.tutorCourses?.length}>
+      <details open={!dashboard.creatorCourses?.length}>
         <summary>Create course</summary>
         <form class="stack-form api-form" data-kind="course" action="/api/tutor/courses" method="post">
           <label>Title<input name="title" required minlength="3" /></label>
           <label>Description<textarea name="description" required minlength="20" rows="4"></textarea></label>
-          <label>Subject<input name="subject" required /></label>
-          <label>Primary level<input name="primaryLevel" required placeholder="Primary 5" /></label>
-          <label>Delivery<select name="deliveryMode"><option value="self-paced">Self-paced</option><option value="live">Live</option><option value="hybrid">Hybrid</option><option value="ai-supported">AI-supported</option></select></label>
-          <label>Price (SGD)<input name="priceSGD" type="number" min="0.50" step="0.01" required /></label>
+          <label>Topic<input name="subject" required placeholder="Mathematics, leadership, cooking…" /></label>
+          <label>Audience<input name="primaryLevel" required placeholder="Beginners, professionals, Primary 5…" /></label>
+          <label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing">Knowledge sharing</option><option value="seminar">Seminar</option><option value="workshop">Workshop</option><option value="coaching">Coaching</option><option value="certification-preparation">Certification preparation</option></select></label>
+          <label>Primary delivery<select name="deliveryMode"><option value="self-paced">Recorded / self-paced</option><option value="live">Live online</option><option value="hybrid">Hybrid</option><option value="ai-supported">AI-supported</option></select></label>
+          <label>Default price (SGD)<input name="priceSGD" type="number" min="0.50" step="0.01" required /></label>
           <button class="button" type="submit">Save draft</button>
           <p class="form-message" aria-live="polite"></p>
         </form>
@@ -72,8 +91,48 @@ if (selectedId) {
           </article>
 
           <article class="panel">
+            <span class="eyebrow">Booking and access</span><h2>Course offerings</h2>
+            <form class="inline-form api-form" data-kind="offering" action={`/api/tutor/courses/${studio.course.id}/offerings`} method="post">
+              <input name="title" required placeholder="Offering title" />
+              <select name="offeringType"><option value="self_paced">Self-paced access</option><option value="cohort">Scheduled cohort</option><option value="event">Single event / seminar</option><option value="academic_term">Academic term</option></select>
+              <select name="deliveryMode"><option value="recorded">Recorded</option><option value="live_online">Live online</option><option value="in_person">In person</option><option value="hybrid">Hybrid</option></select>
+              <input name="academicYear" type="number" min="2000" max="2200" value={new Date().getFullYear()} placeholder="Year (terms only)" />
+              <input name="termNumber" type="number" min="1" max="12" value="1" placeholder="Term (terms only)" />
+              <input name="priceSGD" type="number" min="0.50" step="0.01" placeholder="Price SGD" required />
+              <input name="capacity" type="number" min="1" placeholder="Capacity (optional)" />
+              <label>Starts<input name="startsAt" type="datetime-local" /></label><label>Ends<input name="endsAt" type="datetime-local" /></label>
+              <button class="button button-small" type="submit">Create offering</button><p class="form-message"></p>
+            </form>
+            <div class="term-grid studio-terms">{studio.offerings.map((offering) => (
+              <section class:list={["term-card", { active: offering.id === selectedOfferingId }]}>
+                <a href={`/tutor?courseId=${studio.course.id}&offeringId=${offering.id}`}><span>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{new Intl.NumberFormat("en-SG", { style: "currency", currency: offering.currency }).format(offering.price_cents / 100)}</strong><small>{offering.status} · {offering.pricing_status}{offering.capacity ? ` · ${offering.capacity} places` : ""}</small></a>
+                {offering.status !== "published" && <form class="api-form publish-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="text-link" type="submit">Publish offering & Stripe price</button><p class="form-message"></p></form>}
+              </section>
+            ))}</div>
+            {selectedOffering && <p class="form-success">Authoring content and sessions for <strong>{selectedOffering.title}</strong>.</p>}
+          </article>
+
+          {selectedOffering && <article class="panel">
+            <span class="eyebrow">Scheduled delivery</span><h2>Live and in-person sessions</h2>
+            <form class="inline-form api-form" data-kind="session" action={`/api/tutor/offerings/${selectedOffering.id}/sessions`} method="post">
+              <input name="title" required placeholder="Session title" />
+              <select name="deliveryMode"><option value="live_online">Live online</option><option value="in_person">In person</option></select>
+              <label>Starts<input name="startsAt" type="datetime-local" required /></label><label>Ends<input name="endsAt" type="datetime-local" required /></label>
+              <input name="capacity" type="number" min="1" placeholder="Capacity" />
+              <input name="meetingUrl" type="url" placeholder="HTTPS meeting URL (online)" />
+              <input name="meetingProvider" placeholder="Zoom, Teams…" />
+              <input name="venueName" placeholder="Venue name (in person)" />
+              <input name="venueAddress" placeholder="Venue address (in person)" />
+              <input name="arrivalInstructions" placeholder="Arrival instructions" />
+              <button class="button button-small" type="submit">Add session</button><p class="form-message"></p>
+            </form>
+            <div class="studio-items">{studio.sessions.filter((session) => session.course_offering_id === selectedOffering.id).map((session) => <section><h3>{session.title}</h3><small>{session.delivery_mode.replace("_", " ")} · {new Date(session.starts_at).toLocaleString("en-SG")}{session.venue_name ? ` · ${session.venue_name}` : ""}</small></section>)}</div>
+          </article>}
+
+          <article class="panel">
             <span class="eyebrow">Curriculum</span><h2>Modules and lessons</h2>
             <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/modules`} method="post">
+              <input type="hidden" name="offeringId" value={selectedOfferingId} />
               <input name="title" required placeholder="New module title" /><input name="position" type="number" min="1" value={studio.modules.length + 1} />
               <button class="button button-small" type="submit">Add module</button><p class="form-message"></p>
             </form>
@@ -84,7 +143,9 @@ if (selectedId) {
                   <ul>{studio.lessons.filter((lesson) => lesson.module_id === module.id).map((lesson) => <li>{lesson.title} <small>{lesson.lesson_type}</small></li>)}</ul>
                   <form class="inline-form api-form" action={`/api/tutor/modules/${module.id}/lessons`} method="post">
                     <input name="title" required placeholder="Lesson title" />
-                    <select name="lessonType"><option value="video">Video</option><option value="text">Text</option><option value="document">Document</option><option value="live">Live</option><option value="ai">AI-supported</option></select>
+                    <select name="lessonType"><option value="video">Video</option><option value="text">Text</option><option value="document">Document</option><option value="quiz">Quiz</option><option value="live">Live</option><option value="ai">AI-supported</option></select>
+                    <select name="deliveryMode"><option value="recorded">Recorded / self-paced</option><option value="live_online">Live online</option><option value="in_person">In person</option></select>
+                    <select name="sessionId"><option value="">No scheduled session</option>{studio.sessions.filter((session) => session.course_offering_id === selectedOfferingId).map((session) => <option value={session.id}>{session.title}</option>)}</select>
                     <input name="position" type="number" min="1" value={studio.lessons.filter((lesson) => lesson.module_id === module.id).length + 1} />
                     <button class="button button-small" type="submit">Add lesson</button><p class="form-message"></p>
                   </form>
@@ -96,6 +157,7 @@ if (selectedId) {
           <article class="panel">
             <span class="eyebrow">Knowledge checks</span><h2>Quizzes, tests and mock exams</h2>
             <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/assessments`} method="post">
+              <input type="hidden" name="offeringId" value={selectedOfferingId} />
               <input name="title" required placeholder="Assessment title" />
               <select name="assessmentType"><option value="quiz">Quiz</option><option value="test">Test</option><option value="mock_exam">Mock exam</option></select>
               <input name="passingScore" type="number" min="0" max="100" value="50" />
@@ -123,6 +185,7 @@ if (selectedId) {
           <article class="panel">
             <span class="eyebrow">Recall practice</span><h2>Flashcards</h2>
             <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/flashcard-decks`} method="post">
+              <input type="hidden" name="offeringId" value={selectedOfferingId} />
               <input name="title" required placeholder="Deck title" /><input name="description" placeholder="Short description" />
               <button class="button button-small" type="submit">Create deck</button><p class="form-message"></p>
             </form>
@@ -139,6 +202,33 @@ if (selectedId) {
               </details>
             ))}</div>
           </article>
+
+          <article class="panel">
+            <span class="eyebrow">Resources</span><h2>Course materials</h2>
+            <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/materials`} method="post">
+              <input type="hidden" name="offeringId" value={selectedOfferingId} />
+              <input name="title" required placeholder="Material title" />
+              <select name="materialType"><option value="document">Document</option><option value="video">Video</option><option value="link">External link</option><option value="download">Download</option></select>
+              <input name="externalUrl" type="url" required placeholder="https://…" />
+              <input name="description" placeholder="Description" />
+              <button class="button button-small" type="submit">Add material</button><p class="form-message"></p>
+            </form>
+            <div class="studio-items">{studio.materials.map((material) => <section><h3>{material.title}</h3><small>{material.material_type} · {material.status}</small></section>)}</div>
+          </article>
+
+          {selectedOfferingId && <article class="panel">
+            <span class="eyebrow">Reuse content</span><h2>Assign existing content to this offering</h2>
+            <form class="inline-form api-form" data-kind="assignment" action={`/api/tutor/offerings/${selectedOfferingId}/content`} method="post">
+              <select name="contentSelection" required>
+                <option value="">Choose content</option>
+                {studio.modules.map((item) => <option value={`module|${item.id}`}>Module · {item.title}</option>)}
+                {studio.materials.map((item) => <option value={`material|${item.id}`}>Material · {item.title}</option>)}
+                {studio.assessments.map((item) => <option value={`assessment|${item.id}`}>Assessment · {item.title}</option>)}
+                {studio.flashcardDecks.map((item) => <option value={`flashcard_deck|${item.id}`}>Flashcards · {item.title}</option>)}
+              </select>
+              <button class="button button-small" type="submit">Assign to offering</button><p class="form-message"></p>
+            </form>
+          </article>}
         </>
       )}
     </main>
@@ -154,8 +244,41 @@ if (selectedId) {
         const values = Object.fromEntries(new FormData(form));
         let body: Record<string, unknown> = { ...values };
         if (form.dataset.kind === "course") {
-          body = { ...values, priceCents: Math.round(Number(values.priceSGD) * 100), currency: "SGD", publish: false };
+          body = {
+            ...values,
+            categorySlugs: values.categorySlug ? [String(values.categorySlug)] : [],
+            priceCents: Math.round(Number(values.priceSGD) * 100),
+            currency: "SGD",
+            publish: false
+          };
           delete body.priceSGD;
+          delete body.categorySlug;
+        }
+        if (form.dataset.kind === "offering") {
+          body = {
+            ...values,
+            academicYear: Number(values.academicYear),
+            termNumber: Number(values.termNumber),
+            capacity: values.capacity ? Number(values.capacity) : null,
+            priceCents: Math.round(Number(values.priceSGD) * 100),
+            startsAt: values.startsAt ? new Date(String(values.startsAt)).toISOString() : null,
+            endsAt: values.endsAt ? new Date(String(values.endsAt)).toISOString() : null,
+            timezone: "Asia/Singapore"
+          };
+          delete body.priceSGD;
+        }
+        if (form.dataset.kind === "session") {
+          body = {
+            ...values,
+            capacity: values.capacity ? Number(values.capacity) : null,
+            startsAt: new Date(String(values.startsAt)).toISOString(),
+            endsAt: new Date(String(values.endsAt)).toISOString(),
+            timezone: "Asia/Singapore"
+          };
+        }
+        if (form.dataset.kind === "assignment") {
+          const [kind, contentId] = String(values.contentSelection ?? "").split("|");
+          body = { kind, contentId };
         }
         if (form.dataset.kind === "question") {
           const correct = Number(values.correct);
@@ -175,6 +298,7 @@ if (selectedId) {
         });
         const result = await response.json() as {
           course?: { id?: string };
+          offering?: { id?: string; courseId?: string };
           error?: { message?: string };
         };
         if (!response.ok) {
@@ -183,8 +307,12 @@ if (selectedId) {
           return;
         }
         if (message) { message.className = "form-success"; message.textContent = "Saved."; }
-        const courseId = result.course?.id ?? new URL(location.href).searchParams.get("courseId");
-        location.href = courseId ? `/tutor?courseId=${encodeURIComponent(courseId)}` : "/tutor";
+        const currentUrl = new URL(location.href);
+        const courseId = result.course?.id ?? result.offering?.courseId ?? currentUrl.searchParams.get("courseId");
+        const offeringId = result.offering?.id ?? currentUrl.searchParams.get("offeringId");
+        location.href = courseId
+          ? `/tutor?courseId=${encodeURIComponent(courseId)}${offeringId ? `&offeringId=${encodeURIComponent(offeringId)}` : ""}`
+          : "/tutor";
       });
     });
   </script>

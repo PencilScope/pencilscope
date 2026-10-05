@@ -4,7 +4,7 @@ import "@/styles/journeys.css";
 type Props = { title?: string; description?: string };
 const {
   title = "PencilScope — Learn brightly",
-  description = "Trusted online tuition and guided learning for Singapore primary students."
+  description = "Recorded, live online and in-person courses created by people with knowledge to share."
 } = Astro.props;
 const signedIn = typeof await Astro.session?.get("userId") === "string";
 ---
@@ -25,7 +25,7 @@ const signedIn = typeof await Astro.session?.get("userId") === "string";
     <header class="site-header">
       <div class="shell nav-wrap">
         <a class="brand" href="/" aria-label="PencilScope home"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span>PencilScope</span></a>
-        <nav aria-label="Primary navigation"><a href="/courses">Explore courses</a><a href="/#how-it-works">How it works</a><a href="/#for-tutors">For tutors</a></nav>
+        <nav aria-label="Primary navigation"><a href="/courses">Explore courses</a><a href="/#how-it-works">How it works</a><a href="/tutor">Create a course</a></nav>
         <div class="nav-actions">
           {signedIn ? (
             <>
@@ -44,8 +44,8 @@ const signedIn = typeof await Astro.session?.get("userId") === "string";
       <div class="shell footer-grid">
         <div><a class="brand brand-footer" href="/"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span>PencilScope</span></a><p>Curious minds grow here.</p></div>
         <div><strong>Learn</strong><a href="/courses">All courses</a><a href="/courses?mode=live">Live classes</a><a href="/courses?mode=self-paced">Self-paced</a></div>
-        <div><strong>Company</strong><a href="/#for-tutors">Teach with us</a><a href="mailto:hello@pencilscope.sg">Contact</a><a href="/privacy">Privacy</a></div>
-        <div class="footer-note"><span>Built for families in Singapore</span><span>© {new Date().getFullYear()} PencilScope</span></div>
+        <div><strong>Company</strong><a href="/tutor">Create with us</a><a href="mailto:hello@pencilscope.sg">Contact</a><a href="/privacy">Privacy</a></div>
+        <div class="footer-note"><span>Created for curious people everywhere</span><span>© {new Date().getFullYear()} PencilScope</span></div>
       </div>
     </footer>
   </body>

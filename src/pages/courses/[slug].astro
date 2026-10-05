@@ -4,6 +4,24 @@ import { findCourseBySlug, requestApi } from "@/lib/api-client";
 import { formatPrice } from "@/lib/courses";
 const course = await findCourseBySlug(Astro.params.slug ?? "");
 if (!course) return Astro.redirect("/404");
+const offeringsResponse = await requestApi(`/api/courses/${encodeURIComponent(course.slug)}/offerings`);
+const offeringData = offeringsResponse.ok ? await offeringsResponse.json<{
+  offerings: Array<{
+    id: string; title: string; price_cents: number; currency: string;
+    pricing_status: string;
+    academic_year: number; term_number: number; starts_at: string | null; ends_at: string | null;
+    offering_type: "self_paced" | "cohort" | "event" | "academic_term";
+    delivery_mode: "recorded" | "live_online" | "in_person" | "hybrid";
+    capacity: number | null;
+    has_online_course: number; has_materials: number; has_quizzes: number;
+    has_tests: number; has_mock_exams: number;
+  }>;
+}>() : { offerings: [] };
+const offerings = offeringData.offerings;
+const bookableOfferings = offerings.filter((offering) => offering.pricing_status === "ready");
+const lowestPrice = offerings.length
+  ? Math.min(...offerings.map((offering) => offering.price_cents))
+  : course.priceCents;
 const userId = await Astro.session?.get("userId");
 let viewer: {
   role: string;
@@ -27,13 +45,15 @@ const checkoutSuccess = Astro.url.searchParams.get("checkout") === "success";
   <section class="course-detail-hero">
     <div class="shell detail-grid">
       <div><a class="back-link" href="/courses">← All courses</a><div class="detail-tags"><span>{course.subject}</span><span>{course.level}</span><span>{course.deliveryMode}</span></div><h1>{course.title}</h1><p>{course.description}</p><div class="tutor-line"><span class="tutor-avatar">{course.tutorName.split(" ").at(-1)?.slice(0, 1)}</span><span>Designed and taught by <strong>{course.tutorName}</strong></span></div></div>
-      <aside class="enrol-card"><div class={`enrol-art accent-${course.accent}`}><span>{course.subject.slice(0, 1)}</span></div><div class="enrol-body"><span class="price-label">Course access</span><strong class="detail-price">{formatPrice(course.priceCents, course.currency)}</strong><ul><li>Structured video lessons</li><li>Guided quizzes and practice</li><li>Progress visible to parents</li><li>Certificate when completed</li></ul>
+      <aside class="enrol-card"><div class={`enrol-art accent-${course.accent}`}><span>{course.subject.slice(0, 1)}</span></div><div class="enrol-body"><span class="price-label">{offerings.length > 1 ? "Access from" : "Course access"}</span><strong class="detail-price">{formatPrice(lowestPrice, course.currency)}</strong><ul><li>Recorded, live online or in-person delivery</li><li>Materials and knowledge checks</li><li>Progress visible from the dashboard</li><li>Secure access to the purchased offering</li></ul>
         {checkoutMessage && <p class="form-error">{checkoutMessage}</p>}
         {checkoutSuccess && <p class="form-success">Payment received. Course access will appear on your dashboard as soon as Stripe confirms it.</p>}
         {!viewer && <a class="button button-full" href={`/sign-in?next=/courses/${course.slug}`}>Sign in to enrol</a>}
         {viewer?.role === "parent" && viewer.students.length === 0 && <><p>Add a learner profile before enrolling.</p><a class="button button-full" href="/dashboard">Add learner</a></>}
-        {viewer && (viewer.role === "student" || (viewer.role === "parent" && viewer.students.length > 0)) && <form class="stack-form checkout-form" action="/api/checkout" method="post">
+        {bookableOfferings.length === 0 && <p class="form-message">No offering is currently open for enrolment.</p>}
+        {bookableOfferings.length > 0 && viewer && (viewer.role === "student" || (viewer.role === "parent" && viewer.students.length > 0)) && <form class="stack-form checkout-form" action="/api/checkout" method="post">
           <input type="hidden" name="courseId" value={course.id} /><input type="hidden" name="returnTo" value={`/courses/${course.slug}`} />
+          <label>Course offering<select name="offeringId" required>{bookableOfferings.map((offering) => <option value={offering.id}>{offering.title} · {formatPrice(offering.price_cents, offering.currency)}</option>)}</select></label>
           {viewer.role === "parent" && <label>Enrol learner<select name="studentId" required><option value="">Choose a learner</option>{viewer.students.map((student) => <option value={student.id}>{student.display_name} · {student.primary_level}</option>)}</select></label>}
           <button class="button button-full" type="submit">Continue to secure checkout</button>
         </form>}
@@ -41,5 +61,7 @@ const checkoutSuccess = Astro.url.searchParams.get("checkout") === "success";
         <small>Secure checkout powered by Stripe</small></div></aside>
     </div>
   </section>
-  <section class="shell detail-content"><article><span class="eyebrow">What they’ll learn</span><h2>Confidence, one clear step at a time</h2><p>This starter course page is connected to the course catalogue and commerce API. Lesson plans, tutor previews and outcomes will be loaded from D1 as the authoring workflow is implemented.</p></article><aside><strong>Built for young learners</strong><p>Short sessions, accessible design and parent-guided access are part of every PencilScope learning path.</p></aside></section>
+  <section class="shell detail-content"><article><span class="eyebrow">Available offerings</span><h2>Choose how and when to learn</h2>
+    <div class="term-grid">{offerings.map((offering) => <section class="term-card"><span>{offering.offering_type === "academic_term" ? `${offering.academic_year} · Term ${offering.term_number}` : offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{formatPrice(offering.price_cents, offering.currency)}</strong>{offering.starts_at && <p>{new Date(offering.starts_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" })}</p>}<div class="feature-pills">{offering.has_online_course ? <small>Course lessons</small> : null}{offering.has_materials ? <small>Materials</small> : null}{offering.has_quizzes ? <small>Quizzes</small> : null}{offering.has_tests ? <small>Tests</small> : null}{offering.has_mock_exams ? <small>Mock exams</small> : null}{offering.capacity ? <small>{offering.capacity} places</small> : null}{offering.pricing_status !== "ready" ? <small>Booking opens soon</small> : null}</div></section>)}</div>
+  </article><aside><strong>Access matched to your booking</strong><p>Each purchase unlocks the lessons, sessions, materials and assessments included in that offering.</p></aside></section>
 </BaseLayout>

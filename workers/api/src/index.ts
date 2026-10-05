@@ -1,10 +1,13 @@
 import type Stripe from "stripe";
-import { getTutorActorById } from "../../../src/lib/auth";
+import { getCreatorActorById } from "../../../src/lib/auth";
 import { parseCreateCourseInput, slugifyCourse } from "../../../src/lib/course-input";
 import {
   archivePreviousStripePrice,
+  persistSyncedOfferingPricing,
   persistSyncedCoursePricing,
+  syncOfferingPricing,
   syncCoursePricing,
+  type OfferingPricingRecord,
   type CoursePricingRecord
 } from "../../../src/lib/course-pricing";
 import { findCourseBySlug, listPublishedCourses } from "../../../src/lib/courses";
@@ -64,12 +67,41 @@ async function courseBySlug(env: ApiEnvironment, slug: string): Promise<Response
     : problem(404, "course_not_found", "The course does not exist.");
 }
 
+async function courseOfferingsBySlug(env: ApiEnvironment, slug: string): Promise<Response> {
+  const course = await findCourseBySlug(slug, env.DB);
+  if (!course) return problem(404, "course_not_found", "The course does not exist.");
+  const offerings = await env.DB.prepare(
+    `SELECT o.id, o.title, o.price_cents, o.currency, o.enrolment_opens_at,
+      o.enrolment_closes_at, o.access_ends_at, o.pricing_status,
+      o.offering_type, o.delivery_mode, o.starts_at, o.ends_at, o.timezone, o.capacity,
+      t.academic_year, t.term_number,
+      EXISTS(SELECT 1 FROM course_offering_modules om WHERE om.course_offering_id = o.id) AS has_online_course,
+      EXISTS(SELECT 1 FROM course_offering_materials mt WHERE mt.course_offering_id = o.id) AS has_materials,
+      EXISTS(SELECT 1 FROM course_offering_assessments oa JOIN assessments a ON a.id = oa.assessment_id
+        WHERE oa.course_offering_id = o.id AND a.assessment_type = 'quiz') AS has_quizzes,
+      EXISTS(SELECT 1 FROM course_offering_assessments oa JOIN assessments a ON a.id = oa.assessment_id
+        WHERE oa.course_offering_id = o.id AND a.assessment_type = 'test') AS has_tests,
+      EXISTS(SELECT 1 FROM course_offering_assessments oa JOIN assessments a ON a.id = oa.assessment_id
+        WHERE oa.course_offering_id = o.id AND a.assessment_type = 'mock_exam') AS has_mock_exams
+     FROM course_offerings o JOIN academic_terms t ON t.id = o.academic_term_id
+     WHERE o.course_id = ? AND o.status = 'published'
+       AND (o.enrolment_opens_at IS NULL OR o.enrolment_opens_at <= ?)
+       AND (o.enrolment_closes_at IS NULL OR o.enrolment_closes_at >= ?)
+     ORDER BY COALESCE(o.starts_at, t.starts_at, o.created_at), o.title`
+  ).bind(course.id, new Date().toISOString(), new Date().toISOString()).all();
+  return json({ course, offerings: offerings.results });
+}
+
 async function checkout(request: Request, env: ApiEnvironment): Promise<Response> {
   const form = await request.formData();
   const courseId = form.get("courseId");
+  const offeringId = form.get("offeringId");
   const requestedStudentId = form.get("studentId");
   if (typeof courseId !== "string" || !courseId) {
     return problem(400, "invalid_course", "Choose a valid course.");
+  }
+  if (typeof offeringId !== "string" || !offeringId) {
+    return problem(400, "invalid_offering", "Choose a valid course offering.");
   }
   const actorId = authenticatedUserId(request);
   if (!actorId) return problem(401, "authentication_required", "Sign in before enrolling.");
@@ -93,17 +125,32 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
   }
 
   const course = await env.DB.prepare(
-    "SELECT id, slug, stripe_price_id FROM courses WHERE id = ? AND status = 'published'"
-  ).bind(courseId).first<{ id: string; slug: string; stripe_price_id: string | null }>();
+    `SELECT c.id, c.slug, o.id AS offering_id, o.stripe_price_id, o.capacity
+     FROM courses c JOIN course_offerings o ON o.course_id = c.id
+     WHERE c.id = ? AND o.id = ? AND c.status = 'published' AND o.status = 'published'
+       AND (o.enrolment_opens_at IS NULL OR o.enrolment_opens_at <= ?)
+       AND (o.enrolment_closes_at IS NULL OR o.enrolment_closes_at >= ?)`
+  ).bind(courseId, offeringId, new Date().toISOString(), new Date().toISOString())
+    .first<{ id: string; slug: string; offering_id: string; stripe_price_id: string | null; capacity: number | null }>();
 
   if (!course) return problem(404, "course_not_found", "This course is not available.");
   if (!course.stripe_price_id) {
     return problem(409, "checkout_not_configured", "Checkout is not configured for this course yet.");
   }
   const existing = await env.DB.prepare(
-    "SELECT id FROM enrolments WHERE course_id = ? AND student_user_id = ? AND status IN ('active', 'completed')"
-  ).bind(course.id, studentId).first();
-  if (existing) return problem(409, "already_enrolled", "This student already has access to the course.");
+    `SELECT id FROM enrolment_offerings WHERE course_offering_id = ?
+     AND student_user_id = ? AND status IN ('active', 'completed')`
+  ).bind(course.offering_id, studentId).first();
+  if (existing) return problem(409, "already_enrolled", "This learner already has access to this offering.");
+  if (course.capacity !== null) {
+    const occupancy = await env.DB.prepare(
+      `SELECT COUNT(*) AS total FROM enrolment_offerings
+       WHERE course_offering_id = ? AND status IN ('active', 'completed')`
+    ).bind(course.offering_id).first<{ total: number }>();
+    if (Number(occupancy?.total ?? 0) >= course.capacity) {
+      return problem(409, "offering_full", "This offering has reached its capacity.");
+    }
+  }
 
   try {
     const stripe = createStripe(requireSecret(env, "STRIPE_SECRET_KEY"));
@@ -114,6 +161,7 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
       cancel_url: `${env.APP_URL}/courses/${course.slug}?checkout=cancelled`,
       metadata: {
         courseId: course.id,
+        offeringId: course.offering_id,
         stripePriceId: course.stripe_price_id,
         studentUserId: studentId,
         parentUserId: parentUserId ?? ""
@@ -129,17 +177,22 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
 
 async function recordCompletedCheckout(db: D1Database, session: Stripe.Checkout.Session): Promise<void> {
   const courseId = session.metadata?.courseId;
+  const offeringId = session.metadata?.offeringId;
   const studentUserId = session.metadata?.studentUserId;
   const parentUserId = session.metadata?.parentUserId || null;
-  if (!courseId || !studentUserId) throw new Error("Checkout session is missing enrolment metadata");
+  if (!courseId || !offeringId || !studentUserId) throw new Error("Checkout session is missing enrolment metadata");
   const now = new Date().toISOString();
   const orderId = crypto.randomUUID();
-  const enrolmentId = crypto.randomUUID();
+  const existingEnrolment = await db.prepare(
+    "SELECT id FROM enrolments WHERE course_id = ? AND student_user_id = ?"
+  ).bind(courseId, studentUserId).first<{ id: string }>();
+  const enrolmentId = existingEnrolment?.id ?? crypto.randomUUID();
+  const enrolmentOfferingId = crypto.randomUUID();
   await db.batch([
     db.prepare(
-      `INSERT INTO orders (id, parent_user_id, student_user_id, course_id, stripe_checkout_session_id,
-      stripe_payment_intent_id, stripe_price_id, amount_cents, currency, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?)
+      `INSERT INTO orders (id, parent_user_id, student_user_id, course_id, course_offering_id,
+      stripe_checkout_session_id, stripe_payment_intent_id, stripe_price_id, amount_cents, currency, status, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?)
     ON CONFLICT(stripe_checkout_session_id) DO UPDATE SET
       stripe_payment_intent_id = excluded.stripe_payment_intent_id,
       stripe_price_id = excluded.stripe_price_id,
@@ -150,6 +203,7 @@ async function recordCompletedCheckout(db: D1Database, session: Stripe.Checkout.
       parentUserId,
       studentUserId,
       courseId,
+      offeringId,
       session.id,
       typeof session.payment_intent === "string" ? session.payment_intent : null,
       session.metadata?.stripePriceId ?? null,
@@ -165,7 +219,21 @@ async function recordCompletedCheckout(db: D1Database, session: Stripe.Checkout.
        ON CONFLICT(course_id, student_user_id) DO UPDATE SET
         order_id = excluded.order_id, status = 'active', enrolled_at = excluded.enrolled_at,
         completed_at = NULL`
-    ).bind(enrolmentId, courseId, studentUserId, orderId, now)
+    ).bind(enrolmentId, courseId, studentUserId, orderId, now),
+    db.prepare(
+      `INSERT INTO enrolment_offerings
+        (id, enrolment_id, course_offering_id, student_user_id, order_id, status, enrolled_at)
+       VALUES (?, ?, ?, ?, ?, 'active', ?)
+       ON CONFLICT(course_offering_id, student_user_id) DO UPDATE SET
+        enrolment_id = excluded.enrolment_id, order_id = excluded.order_id,
+        status = 'active', enrolled_at = excluded.enrolled_at, completed_at = NULL`
+    ).bind(enrolmentOfferingId, enrolmentId, offeringId, studentUserId, orderId, now),
+    db.prepare(
+      `INSERT OR IGNORE INTO course_session_attendance
+        (course_session_id, student_user_id, status, updated_at)
+       SELECT id, ?, 'registered', ? FROM course_sessions
+       WHERE course_offering_id = ? AND status = 'scheduled'`
+    ).bind(studentUserId, now, offeringId)
   ]);
 }
 
@@ -217,8 +285,8 @@ async function stripeWebhook(request: Request, env: ApiEnvironment): Promise<Res
 }
 
 async function createCourse(request: Request, env: ApiEnvironment): Promise<Response> {
-  const actor = await getTutorActorById(authenticatedUserId(request), env.DB);
-  if (!actor) return problem(401, "authentication_required", "Sign in with an approved tutor account.");
+  const actor = await getCreatorActorById(authenticatedUserId(request), env.DB);
+  if (!actor) return problem(401, "authentication_required", "Sign in to create a course.");
 
   let input;
   try {
@@ -241,7 +309,7 @@ async function createCourse(request: Request, env: ApiEnvironment): Promise<Resp
     stripe_price_id: null
   };
 
-  await env.DB.prepare(
+  const statements = [env.DB.prepare(
     `INSERT INTO courses
       (id, tutor_id, slug, title, description, subject, primary_level, delivery_mode,
        price_cents, currency, status, pricing_status, pricing_version, created_at, updated_at)
@@ -249,7 +317,18 @@ async function createCourse(request: Request, env: ApiEnvironment): Promise<Resp
   ).bind(
     id, actor.id, slug, input.title, input.description, input.subject,
     input.primaryLevel, input.deliveryMode, input.priceCents, input.currency, now, now
-  ).run();
+  ), env.DB.prepare(
+    `INSERT INTO course_members
+      (course_id, user_id, member_role, status, created_at, updated_at)
+     VALUES (?, ?, 'owner', 'active', ?, ?)`
+  ).bind(id, actor.id, now, now)];
+  for (const categorySlug of input.categorySlugs) {
+    statements.push(env.DB.prepare(
+      `INSERT OR IGNORE INTO course_category_links (course_id, category_id)
+       SELECT ?, id FROM course_categories WHERE slug = ? AND active = 1`
+    ).bind(id, categorySlug));
+  }
+  await env.DB.batch(statements);
 
   if (!input.publish) {
     return json({ course: { id, slug, status: "draft", pricingStatus: "pending" } }, { status: 201 });
@@ -292,8 +371,8 @@ type PublishableCourse = CoursePricingRecord & {
 };
 
 async function publishCourse(request: Request, env: ApiEnvironment, id: string): Promise<Response> {
-  const actor = await getTutorActorById(authenticatedUserId(request), env.DB);
-  if (!actor) return problem(401, "authentication_required", "Sign in with an approved tutor account.");
+  const actor = await getCreatorActorById(authenticatedUserId(request), env.DB);
+  if (!actor) return problem(401, "authentication_required", "Sign in to manage this course.");
 
   const course = await env.DB.prepare(
     `SELECT id, tutor_id, slug, title, description, price_cents, currency, status,
@@ -354,8 +433,8 @@ type EditableCourse = CoursePricingRecord & {
 };
 
 async function updateCoursePricing(request: Request, env: ApiEnvironment, id: string): Promise<Response> {
-  const actor = await getTutorActorById(authenticatedUserId(request), env.DB);
-  if (!actor) return problem(401, "authentication_required", "Sign in with an approved tutor account.");
+  const actor = await getCreatorActorById(authenticatedUserId(request), env.DB);
+  if (!actor) return problem(401, "authentication_required", "Sign in to manage this course.");
 
   let payload: { priceCents?: unknown; currency?: unknown };
   try {
@@ -443,8 +522,53 @@ async function updateCoursePricing(request: Request, env: ApiEnvironment, id: st
   }
 }
 
+async function publishOffering(request: Request, env: ApiEnvironment, id: string): Promise<Response> {
+  const actor = await getCreatorActorById(authenticatedUserId(request), env.DB);
+  if (!actor) return problem(401, "authentication_required", "Sign in to manage this offering.");
+  const offering = await env.DB.prepare(
+    `SELECT o.id, o.course_id, o.title, o.price_cents, o.currency, o.pricing_version,
+      o.stripe_price_id, c.title AS course_title, c.description AS course_description,
+      c.stripe_product_id
+     FROM course_offerings o JOIN courses c ON c.id = o.course_id
+     WHERE o.id = ? AND (c.tutor_id = ? OR ? = 'admin') AND o.status != 'archived'`
+  ).bind(id, actor.id, actor.role).first<OfferingPricingRecord>();
+  if (!offering) return problem(404, "offering_not_found", "The course offering does not exist.");
+  try {
+    await env.DB.prepare(
+      "UPDATE course_offerings SET pricing_status = 'syncing', updated_at = ? WHERE id = ?"
+    ).bind(new Date().toISOString(), id).run();
+    const stripeSecret = requireSecret(env, "STRIPE_SECRET_KEY");
+    const pricing = await syncOfferingPricing(stripeSecret, offering);
+    await persistSyncedOfferingPricing(env.DB, offering, pricing);
+    await archivePreviousStripePrice(stripeSecret, pricing).catch((error) => {
+      console.warn("offering.pricing.previous_price_archive_failed", { offeringId: id, error });
+    });
+    return json({
+      offering: {
+        id,
+        courseId: offering.course_id,
+        status: "published",
+        pricingStatus: "ready",
+        stripeProductId: pricing.stripeProductId,
+        stripePriceId: pricing.stripePriceId
+      }
+    });
+  } catch (error) {
+    console.error("offering.pricing.sync_failed", { offeringId: id, error });
+    await env.DB.prepare(
+      "UPDATE course_offerings SET pricing_status = 'failed', updated_at = ? WHERE id = ?"
+    ).bind(new Date().toISOString(), id).run();
+    return problem(502, "offering_pricing_sync_failed", "The offering price could not be created in Stripe.");
+  }
+}
+
 function routeId(pathname: string, action: "publish" | "pricing"): string | null {
   const match = pathname.match(new RegExp(`^/api/tutor/courses/([^/]+)/${action}$`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function offeringPublishId(pathname: string): string | null {
+  const match = pathname.match(/^\/api\/tutor\/offerings\/([^/]+)\/publish$/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -457,6 +581,10 @@ export default {
     const journeyResponse = await handleJourneyRequest(request, env, pathname);
     if (journeyResponse) return journeyResponse;
     if (request.method === "GET" && pathname === "/api/courses") return courses(env);
+    const offeringListMatch = pathname.match(/^\/api\/courses\/([^/]+)\/offerings$/);
+    if (request.method === "GET" && offeringListMatch) {
+      return courseOfferingsBySlug(env, decodeURIComponent(offeringListMatch[1]));
+    }
     if (request.method === "GET" && pathname.startsWith("/api/courses/")) {
       return courseBySlug(env, decodeURIComponent(pathname.slice("/api/courses/".length)));
     }
@@ -473,6 +601,10 @@ export default {
     const pricingId = routeId(pathname, "pricing");
     if (request.method === "PATCH" && pricingId) {
       return updateCoursePricing(request, env, pricingId);
+    }
+    const publishOfferingId = offeringPublishId(pathname);
+    if (request.method === "POST" && publishOfferingId) {
+      return publishOffering(request, env, publishOfferingId);
     }
 
     return problem(404, "not_found", "API route not found.");

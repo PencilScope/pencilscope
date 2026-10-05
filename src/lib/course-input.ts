@@ -10,6 +10,7 @@ export type CreateCourseInput = {
   priceCents: number;
   currency: "SGD";
   publish: boolean;
+  categorySlugs: string[];
 };
 
 export function parseCreateCourseInput(value: unknown): CreateCourseInput {
@@ -27,6 +28,14 @@ export function parseCreateCourseInput(value: unknown): CreateCourseInput {
   }
   if (input.currency !== "SGD") throw new Error("Only SGD pricing is currently supported");
 
+  const categorySlugs = Array.isArray(input.categorySlugs)
+    ? input.categorySlugs
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean)
+      .slice(0, 10)
+    : [];
+
   return {
     title,
     description,
@@ -35,7 +44,8 @@ export function parseCreateCourseInput(value: unknown): CreateCourseInput {
     deliveryMode: input.deliveryMode as DeliveryMode,
     priceCents: Number(input.priceCents),
     currency: "SGD",
-    publish: input.publish === true
+    publish: input.publish === true,
+    categorySlugs
   };
 }
 
@@ -58,4 +68,3 @@ export function slugifyCourse(title: string, id: string): string {
     .slice(0, 70);
   return `${slug || "course"}-${id.slice(0, 8)}`;
 }
-

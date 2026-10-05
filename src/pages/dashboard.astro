@@ -13,12 +13,16 @@ const data = await response.json<{
     id: string;
     student_user_id: string;
     course_id: string;
+    course_offering_id: string;
+    offering_title: string;
+    academic_year: number;
+    term_number: number;
     status: string;
     title: string;
     subject: string;
     progress_percent: number;
   }>;
-  tutorCourses?: Array<{
+  creatorCourses?: Array<{
     id: string;
     slug: string;
     title: string;
@@ -68,7 +72,7 @@ const added = Astro.url.searchParams.get("added");
             <div class="dashboard-courses">
               {data.enrolments.map((enrolment) => (
                 <a href={`/learn/${enrolment.course_id}?studentId=${enrolment.student_user_id}`}>
-                  <span>{enrolment.subject}</span><strong>{enrolment.title}</strong>
+                  <span>{enrolment.subject} · {enrolment.offering_title}</span><strong>{enrolment.title}</strong>
                   <small>{Math.round(enrolment.progress_percent)}% complete · {enrolment.status}</small>
                 </a>
               ))}
@@ -82,19 +86,17 @@ const added = Astro.url.searchParams.get("added");
       <article class="panel panel-wide">
         <span class="eyebrow">My learning</span><h2>Courses</h2>
         {data.enrolments?.length ? <div class="dashboard-courses">{data.enrolments.map((enrolment) => (
-          <a href={`/learn/${enrolment.course_id}`}><span>{enrolment.subject}</span><strong>{enrolment.title}</strong><small>{Math.round(enrolment.progress_percent)}% complete</small></a>
+          <a href={`/learn/${enrolment.course_id}`}><span>{enrolment.subject} · {enrolment.offering_title}</span><strong>{enrolment.title}</strong><small>{Math.round(enrolment.progress_percent)}% complete</small></a>
         ))}</div> : <p>You do not have an active course yet.</p>}
       </article>
     )}
 
-    {(data.user.role === "tutor" || data.user.role === "admin") && (
-      <article class="panel panel-wide">
-        <span class="eyebrow">Tutor studio</span><h2>Your courses</h2>
-        {data.tutorCourses?.length ? <div class="dashboard-courses">{data.tutorCourses.map((course) => (
+    <article class="panel panel-wide">
+        <span class="eyebrow">Creator studio</span><h2>Create and manage courses</h2>
+        {data.creatorCourses?.length ? <div class="dashboard-courses">{data.creatorCourses.map((course) => (
           <a href={`/tutor?courseId=${course.id}`}><span>{course.status} · {course.pricing_status}</span><strong>{course.title}</strong><small>{course.enrolment_count} learners</small></a>
-        ))}</div> : <p>Your tutor profile must be approved before publishing courses.</p>}
-        <a class="button" href="/tutor">Open tutor studio</a>
+        ))}</div> : <p>Share a skill, run a seminar, teach a class, or publish a self-paced course.</p>}
+        <a class="button" href="/tutor">Open creator studio</a>
       </article>
-    )}
   </section>
 </BaseLayout>

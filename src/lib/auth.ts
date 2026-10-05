@@ -7,6 +7,22 @@ export type AuthenticatedActor = {
   role: "tutor" | "admin";
 };
 
+export type CreatorActor = {
+  id: string;
+  role: "parent" | "student" | "tutor" | "admin";
+};
+
+export async function getCreatorActorById(
+  userId: string | null,
+  db: D1Database
+): Promise<CreatorActor | null> {
+  if (!userId) return null;
+  const user = await db.prepare(
+    "SELECT id, role FROM users WHERE id = ? AND status = 'active'"
+  ).bind(userId).first<{ id: string; role: CreatorActor["role"] }>();
+  return user ? { id: user.id, role: user.role } : null;
+}
+
 export async function getTutorActor(
   session: SessionReader | undefined,
   db: D1Database

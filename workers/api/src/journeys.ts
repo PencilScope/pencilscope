@@ -1,4 +1,4 @@
-import { getTutorActorById } from "../../../src/lib/auth";
+import { getCreatorActorById } from "../../../src/lib/auth";
 import { json, problem } from "../../../src/lib/http";
 import type { ApiEnvironment } from "./index";
 
@@ -219,16 +219,15 @@ async function dashboard(request: Request, env: ApiEnvironment): Promise<Respons
   const actor = await currentUser(request, env);
   if (!actor) return problem(401, "authentication_required", "Sign in to continue.");
 
-  if (actor.role === "tutor" || actor.role === "admin") {
-    const result = await env.DB.prepare(
+  const creatorCourses = await env.DB.prepare(
       `SELECT c.id, c.slug, c.title, c.status, c.pricing_status,
-        COUNT(e.id) AS enrolment_count
-       FROM courses c LEFT JOIN enrolments e ON e.course_id = c.id
+        COUNT(eo.id) AS enrolment_count
+       FROM courses c LEFT JOIN course_offerings o ON o.course_id = c.id
+       LEFT JOIN enrolment_offerings eo ON eo.course_offering_id = o.id
        WHERE c.tutor_id = ? OR ? = 'admin'
+         OR EXISTS (SELECT 1 FROM course_members cm WHERE cm.course_id = c.id AND cm.user_id = ? AND cm.status = 'active')
        GROUP BY c.id ORDER BY c.updated_at DESC`
-    ).bind(actor.id, actor.role).all();
-    return json({ user: actor, tutorCourses: result.results });
-  }
+    ).bind(actor.id, actor.role, actor.id).all();
 
   const students = actor.role === "parent"
     ? (await env.DB.prepare(
@@ -237,22 +236,26 @@ async function dashboard(request: Request, env: ApiEnvironment): Promise<Respons
          LEFT JOIN student_profiles sp ON sp.user_id = u.id
          WHERE ps.parent_user_id = ? ORDER BY u.display_name`
       ).bind(actor.id).all()).results
-    : [{ id: actor.id, display_name: actor.display_name, primary_level: null }];
+    : actor.role === "student" ? [{ id: actor.id, display_name: actor.display_name, primary_level: null }] : [];
   const studentIds = students.map((student) => String(student.id));
   let enrolments: unknown[] = [];
   if (studentIds.length) {
     const placeholders = studentIds.map(() => "?").join(",");
     enrolments = (await env.DB.prepare(
-      `SELECT e.id, e.student_user_id, e.course_id, e.status, e.enrolled_at,
-        c.title, c.slug, c.subject,
+      `SELECT e.id, e.student_user_id, e.course_id, eo.status, eo.enrolled_at,
+        eo.course_offering_id, o.title AS offering_title,
+        t.academic_year, t.term_number, c.title, c.slug, c.subject,
         COALESCE(AVG(pr.progress_percent), 0) AS progress_percent
        FROM enrolments e JOIN courses c ON c.id = e.course_id
+       JOIN enrolment_offerings eo ON eo.enrolment_id = e.id
+       JOIN course_offerings o ON o.id = eo.course_offering_id
+       JOIN academic_terms t ON t.id = o.academic_term_id
        LEFT JOIN progress_records pr ON pr.enrolment_id = e.id
        WHERE e.student_user_id IN (${placeholders})
-       GROUP BY e.id ORDER BY e.enrolled_at DESC`
+       GROUP BY eo.id ORDER BY eo.enrolled_at DESC`
     ).bind(...studentIds).all()).results;
   }
-  return json({ user: actor, students, enrolments });
+  return json({ user: actor, students, enrolments, creatorCourses: creatorCourses.results, tutorCourses: creatorCourses.results });
 }
 
 async function activeEnrolment(
@@ -265,43 +268,131 @@ async function activeEnrolment(
   ).bind(studentId, courseId).first<{ id: string }>();
 }
 
+async function hasAssessmentAccess(
+  env: ApiEnvironment,
+  studentId: string,
+  assessmentId: string
+): Promise<{ id: string } | null> {
+  return env.DB.prepare(
+    `SELECT e.id FROM enrolments e
+     JOIN enrolment_offerings eo ON eo.enrolment_id = e.id
+     JOIN course_offerings o ON o.id = eo.course_offering_id
+     JOIN course_offering_assessments oa ON oa.course_offering_id = o.id
+     WHERE e.student_user_id = ? AND oa.assessment_id = ?
+       AND e.status = 'active' AND eo.status = 'active'
+       AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?)
+     LIMIT 1`
+  ).bind(studentId, assessmentId, new Date().toISOString()).first<{ id: string }>();
+}
+
+async function hasDeckAccess(
+  env: ApiEnvironment,
+  studentId: string,
+  deckId: string
+): Promise<boolean> {
+  return Boolean(await env.DB.prepare(
+    `SELECT 1 FROM enrolment_offerings eo
+     JOIN course_offerings o ON o.id = eo.course_offering_id
+     JOIN course_offering_flashcard_decks od ON od.course_offering_id = o.id
+     WHERE eo.student_user_id = ? AND od.deck_id = ? AND eo.status = 'active'
+       AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?) LIMIT 1`
+  ).bind(studentId, deckId, new Date().toISOString()).first());
+}
+
 async function courseLearning(request: Request, env: ApiEnvironment, courseId: string): Promise<Response> {
   const student = new URL(request.url).searchParams.get("studentId");
   const permitted = await permittedStudent(request, env, student);
   if (permitted instanceof Response) return permitted;
   const enrolment = await activeEnrolment(env, permitted.studentId, courseId);
   if (!enrolment) return problem(403, "enrolment_required", "An active enrolment is required.");
+  const offeringAccess = await env.DB.prepare(
+    `SELECT o.id, o.title, o.access_ends_at, o.offering_type, o.delivery_mode,
+      o.starts_at, o.ends_at, o.timezone, t.academic_year, t.term_number
+     FROM enrolment_offerings eo JOIN course_offerings o ON o.id = eo.course_offering_id
+     JOIN academic_terms t ON t.id = o.academic_term_id
+     WHERE eo.enrolment_id = ? AND eo.status = 'active'
+       AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?)
+     ORDER BY COALESCE(o.starts_at, t.starts_at, o.created_at), o.title`
+  ).bind(enrolment.id, new Date().toISOString()).all();
+  if (!offeringAccess.results.length) {
+    return problem(403, "offering_enrolment_required", "An active course-offering enrolment is required.");
+  }
 
   const course = await env.DB.prepare(
     "SELECT id, slug, title, description, subject, primary_level, delivery_mode FROM courses WHERE id = ?"
   ).bind(courseId).first();
   if (!course) return problem(404, "course_not_found", "The course does not exist.");
   const modules = await env.DB.prepare(
-    "SELECT id, title, position FROM course_modules WHERE course_id = ? ORDER BY position"
-  ).bind(courseId).all();
+    `SELECT DISTINCT m.id, m.title, om.position FROM course_modules m
+     JOIN course_offering_modules om ON om.module_id = m.id
+     JOIN enrolment_offerings eo ON eo.course_offering_id = om.course_offering_id
+     JOIN course_offerings o ON o.id = eo.course_offering_id
+     WHERE m.course_id = ? AND eo.enrolment_id = ? AND eo.status = 'active'
+       AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?)
+     ORDER BY om.position`
+  ).bind(courseId, enrolment.id, new Date().toISOString()).all();
   const lessons = await env.DB.prepare(
-    `SELECT l.id, l.module_id, l.title, l.lesson_type, l.content_json, l.position,
+    `SELECT l.id, l.module_id, l.title, l.lesson_type, l.delivery_mode,
+      l.course_session_id, l.content_json, l.position,
       l.estimated_minutes, COALESCE(pr.status, 'not-started') AS progress_status,
       COALESCE(pr.progress_percent, 0) AS progress_percent
      FROM lessons l JOIN course_modules m ON m.id = l.module_id
+     JOIN course_offering_modules om ON om.module_id = m.id
+     JOIN enrolment_offerings eo ON eo.course_offering_id = om.course_offering_id
+     JOIN course_offerings o ON o.id = eo.course_offering_id
      LEFT JOIN progress_records pr ON pr.lesson_id = l.id AND pr.enrolment_id = ?
-     WHERE m.course_id = ? ORDER BY m.position, l.position`
-  ).bind(enrolment.id, courseId).all();
+     WHERE m.course_id = ? AND eo.enrolment_id = ? AND eo.status = 'active'
+       AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?)
+     GROUP BY l.id ORDER BY om.position, l.position`
+  ).bind(enrolment.id, courseId, enrolment.id, new Date().toISOString()).all();
   const assessments = await env.DB.prepare(
-    `SELECT id, lesson_id, assessment_type, title, time_limit_seconds,
-      attempt_limit, passing_score FROM assessments
-     WHERE course_id = ? AND status = 'published' ORDER BY created_at`
-  ).bind(courseId).all();
+    `SELECT a.id, a.lesson_id, a.assessment_type, a.title, a.time_limit_seconds,
+      a.attempt_limit, a.passing_score FROM assessments a
+     JOIN course_offering_assessments oa ON oa.assessment_id = a.id
+     JOIN enrolment_offerings eo ON eo.course_offering_id = oa.course_offering_id
+     JOIN course_offerings o ON o.id = eo.course_offering_id
+     WHERE a.course_id = ? AND a.status = 'published' AND eo.enrolment_id = ?
+       AND eo.status = 'active' AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?)
+     GROUP BY a.id ORDER BY oa.position`
+  ).bind(courseId, enrolment.id, new Date().toISOString()).all();
   const decks = await env.DB.prepare(
-    "SELECT id, lesson_id, title, description FROM flashcard_decks WHERE course_id = ? AND status = 'published'"
-  ).bind(courseId).all();
+    `SELECT d.id, d.lesson_id, d.title, d.description FROM flashcard_decks d
+     JOIN course_offering_flashcard_decks od ON od.deck_id = d.id
+     JOIN enrolment_offerings eo ON eo.course_offering_id = od.course_offering_id
+     JOIN course_offerings o ON o.id = eo.course_offering_id
+     WHERE d.course_id = ? AND d.status = 'published' AND eo.enrolment_id = ?
+       AND eo.status = 'active' AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?)
+     GROUP BY d.id ORDER BY od.position`
+  ).bind(courseId, enrolment.id, new Date().toISOString()).all();
+  const materials = await env.DB.prepare(
+    `SELECT m.id, m.title, m.description, m.material_type FROM course_materials m
+     JOIN course_offering_materials om ON om.material_id = m.id
+     JOIN enrolment_offerings eo ON eo.course_offering_id = om.course_offering_id
+     JOIN course_offerings o ON o.id = eo.course_offering_id
+     WHERE m.course_id = ? AND m.status = 'published' AND eo.enrolment_id = ?
+       AND eo.status = 'active' AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?)
+     GROUP BY m.id ORDER BY om.position`
+  ).bind(courseId, enrolment.id, new Date().toISOString()).all();
+  const sessions = await env.DB.prepare(
+    `SELECT s.id, s.course_offering_id, s.title, s.delivery_mode, s.starts_at, s.ends_at,
+      s.timezone, s.capacity, s.meeting_url, s.meeting_provider,
+      v.name AS venue_name, v.address_line_1, v.address_line_2, v.city, v.postal_code,
+      v.arrival_instructions
+     FROM course_sessions s JOIN enrolment_offerings eo ON eo.course_offering_id = s.course_offering_id
+     LEFT JOIN venues v ON v.id = s.venue_id
+     WHERE eo.enrolment_id = ? AND eo.status = 'active' AND s.status = 'scheduled'
+     ORDER BY s.starts_at`
+  ).bind(enrolment.id).all();
   return json({
     course,
     enrolment,
+    offerings: offeringAccess.results,
     modules: modules.results,
     lessons: lessons.results,
     assessments: assessments.results,
-    flashcardDecks: decks.results
+    flashcardDecks: decks.results,
+    materials: materials.results,
+    sessions: sessions.results
   });
 }
 
@@ -316,6 +407,14 @@ async function updateProgress(request: Request, env: ApiEnvironment, lessonId: s
   if (!lesson) return problem(404, "lesson_not_found", "The lesson does not exist.");
   const enrolment = await activeEnrolment(env, permitted.studentId, lesson.course_id);
   if (!enrolment) return problem(403, "enrolment_required", "An active enrolment is required.");
+  const lessonAccess = await env.DB.prepare(
+    `SELECT 1 FROM lessons l JOIN course_offering_modules om ON om.module_id = l.module_id
+     JOIN enrolment_offerings eo ON eo.course_offering_id = om.course_offering_id
+     JOIN course_offerings o ON o.id = eo.course_offering_id
+     WHERE l.id = ? AND eo.enrolment_id = ? AND eo.status = 'active'
+       AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?) LIMIT 1`
+  ).bind(lessonId, enrolment.id, new Date().toISOString()).first();
+  if (!lessonAccess) return problem(403, "lesson_forbidden", "This lesson is not included in the purchased term.");
   const percent = Math.max(0, Math.min(100, Number(input?.progressPercent ?? 0)));
   const status = percent >= 100 ? "completed" : percent > 0 ? "started" : "not-started";
   const now = new Date().toISOString();
@@ -355,7 +454,7 @@ async function assessmentDetails(request: Request, env: ApiEnvironment, assessme
     version: number;
   }>();
   if (!assessment) return problem(404, "assessment_not_found", "The assessment does not exist.");
-  const enrolment = await activeEnrolment(env, permitted.studentId, assessment.course_id);
+  const enrolment = await hasAssessmentAccess(env, permitted.studentId, assessment.id);
   if (!enrolment) return problem(403, "enrolment_required", "An active enrolment is required.");
   const questions = await env.DB.prepare(
     "SELECT id, question_type, prompt, points, position FROM assessment_questions WHERE assessment_id = ? ORDER BY position"
@@ -387,7 +486,7 @@ async function startAttempt(request: Request, env: ApiEnvironment, assessmentId:
     attempt_limit: number | null;
   }>();
   if (!assessment) return problem(404, "assessment_unavailable", "The assessment is not available.");
-  const enrolment = await activeEnrolment(env, permitted.studentId, assessment.course_id);
+  const enrolment = await hasAssessmentAccess(env, permitted.studentId, assessment.id);
   if (!enrolment) return problem(403, "enrolment_required", "An active enrolment is required.");
   const attemptCount = await env.DB.prepare(
     "SELECT COUNT(*) AS count FROM assessment_attempts WHERE assessment_id = ? AND student_user_id = ?"
@@ -555,7 +654,7 @@ async function flashcardDeck(request: Request, env: ApiEnvironment, deckId: stri
     description: string;
   }>();
   if (!deck) return problem(404, "deck_not_found", "The flashcard deck does not exist.");
-  if (!await activeEnrolment(env, permitted.studentId, deck.course_id)) {
+  if (!await hasDeckAccess(env, permitted.studentId, deck.id)) {
     return problem(403, "enrolment_required", "An active enrolment is required.");
   }
   const cards = await env.DB.prepare(
@@ -578,9 +677,9 @@ async function reviewFlashcard(request: Request, env: ApiEnvironment, cardId: st
   const permitted = await permittedStudent(request, env, studentId);
   if (permitted instanceof Response) return permitted;
   const card = await env.DB.prepare(
-    "SELECT d.course_id FROM flashcards f JOIN flashcard_decks d ON d.id = f.deck_id WHERE f.id = ?"
-  ).bind(cardId).first<{ course_id: string }>();
-  if (!card || !await activeEnrolment(env, permitted.studentId, card.course_id)) {
+    "SELECT f.deck_id FROM flashcards f WHERE f.id = ?"
+  ).bind(cardId).first<{ deck_id: string }>();
+  if (!card || !await hasDeckAccess(env, permitted.studentId, card.deck_id)) {
     return problem(403, "enrolment_required", "An active enrolment is required.");
   }
   const previous = await env.DB.prepare(
@@ -619,13 +718,45 @@ async function reviewFlashcard(request: Request, env: ApiEnvironment, cardId: st
   } });
 }
 
+async function courseMaterial(request: Request, env: ApiEnvironment, materialId: string): Promise<Response> {
+  const studentId = new URL(request.url).searchParams.get("studentId");
+  const permitted = await permittedStudent(request, env, studentId);
+  if (permitted instanceof Response) return permitted;
+  const material = await env.DB.prepare(
+    `SELECT m.id, m.title, m.material_type, m.storage_key, m.external_url
+     FROM course_materials m
+     JOIN course_offering_materials om ON om.material_id = m.id
+     JOIN enrolment_offerings eo ON eo.course_offering_id = om.course_offering_id
+     JOIN course_offerings o ON o.id = eo.course_offering_id
+     WHERE m.id = ? AND m.status = 'published' AND eo.student_user_id = ?
+       AND eo.status = 'active' AND (o.access_ends_at IS NULL OR o.access_ends_at >= ?)
+     LIMIT 1`
+  ).bind(materialId, permitted.studentId, new Date().toISOString()).first<{
+    id: string;
+    title: string;
+    material_type: string;
+    storage_key: string | null;
+    external_url: string | null;
+  }>();
+  if (!material) return problem(403, "material_forbidden", "This material is not included in the purchased term.");
+  if (material.external_url) return Response.redirect(material.external_url, 302);
+  if (!material.storage_key) return problem(404, "material_missing", "The material file is unavailable.");
+  const object = await env.MEDIA.get(material.storage_key);
+  if (!object) return problem(404, "material_missing", "The material file is unavailable.");
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set("etag", object.httpEtag);
+  headers.set("content-disposition", `inline; filename="${material.title.replace(/["\\]/g, "_")}"`);
+  return new Response(object.body, { headers });
+}
+
 async function tutorAuthoring(
   request: Request,
   env: ApiEnvironment,
   pathname: string
 ): Promise<Response | null> {
-  const actor = await getTutorActorById(userIdFrom(request), env.DB);
-  if (!actor) return problem(401, "approved_tutor_required", "An approved tutor account is required.");
+  const actor = await getCreatorActorById(userIdFrom(request), env.DB);
+  if (!actor) return problem(401, "creator_required", "Sign in to create or manage a course.");
   const studioMatch = pathname.match(/^\/api\/tutor\/courses\/([^/]+)\/studio$/);
   if (request.method === "GET" && studioMatch) {
     const courseId = decodeURIComponent(studioMatch[1]);
@@ -633,16 +764,55 @@ async function tutorAuthoring(
       "SELECT id, slug, title, description, subject, primary_level, delivery_mode, price_cents, currency, status, pricing_status FROM courses WHERE id = ? AND (tutor_id = ? OR ? = 'admin')"
     ).bind(courseId, actor.id, actor.role).first();
     if (!course) return problem(404, "course_not_found", "The course does not exist.");
-    const [modules, lessons, assessments, decks] = await Promise.all([
+    const [modules, lessons, assessments, decks, offerings, materials, offeringModules, offeringAssessments, offeringDecks, offeringMaterials, categories, sessions] = await Promise.all([
       env.DB.prepare("SELECT id, title, position FROM course_modules WHERE course_id = ? ORDER BY position").bind(courseId).all(),
       env.DB.prepare(
-        "SELECT l.id, l.module_id, l.title, l.lesson_type, l.position FROM lessons l JOIN course_modules m ON m.id = l.module_id WHERE m.course_id = ? ORDER BY m.position, l.position"
+        "SELECT l.id, l.module_id, l.title, l.lesson_type, l.delivery_mode, l.course_session_id, l.position FROM lessons l JOIN course_modules m ON m.id = l.module_id WHERE m.course_id = ? ORDER BY m.position, l.position"
       ).bind(courseId).all(),
       env.DB.prepare(
         "SELECT id, title, assessment_type, status FROM assessments WHERE course_id = ? ORDER BY created_at"
       ).bind(courseId).all(),
       env.DB.prepare(
         "SELECT id, title, status FROM flashcard_decks WHERE course_id = ? ORDER BY created_at"
+      ).bind(courseId).all(),
+      env.DB.prepare(
+        `SELECT o.id, o.title, o.price_cents, o.currency, o.status, o.pricing_status,
+          o.enrolment_opens_at, o.enrolment_closes_at, o.access_ends_at,
+          o.offering_type, o.delivery_mode, o.starts_at, o.ends_at, o.timezone, o.capacity,
+          t.academic_year, t.term_number
+         FROM course_offerings o JOIN academic_terms t ON t.id = o.academic_term_id
+         WHERE o.course_id = ? ORDER BY COALESCE(o.starts_at, t.starts_at, o.created_at), o.title`
+      ).bind(courseId).all(),
+      env.DB.prepare(
+        "SELECT id, title, description, material_type, status FROM course_materials WHERE course_id = ? ORDER BY created_at"
+      ).bind(courseId).all(),
+      env.DB.prepare(
+        `SELECT om.course_offering_id, om.module_id FROM course_offering_modules om
+         JOIN course_offerings o ON o.id = om.course_offering_id WHERE o.course_id = ?`
+      ).bind(courseId).all(),
+      env.DB.prepare(
+        `SELECT oa.course_offering_id, oa.assessment_id FROM course_offering_assessments oa
+         JOIN course_offerings o ON o.id = oa.course_offering_id WHERE o.course_id = ?`
+      ).bind(courseId).all(),
+      env.DB.prepare(
+        `SELECT od.course_offering_id, od.deck_id FROM course_offering_flashcard_decks od
+         JOIN course_offerings o ON o.id = od.course_offering_id WHERE o.course_id = ?`
+      ).bind(courseId).all(),
+      env.DB.prepare(
+        `SELECT om.course_offering_id, om.material_id FROM course_offering_materials om
+         JOIN course_offerings o ON o.id = om.course_offering_id WHERE o.course_id = ?`
+      ).bind(courseId).all(),
+      env.DB.prepare(
+        `SELECT cc.id, cc.slug, cc.title,
+          EXISTS(SELECT 1 FROM course_category_links cl WHERE cl.course_id = ? AND cl.category_id = cc.id) AS selected
+         FROM course_categories cc WHERE cc.active = 1 ORDER BY cc.position, cc.title`
+      ).bind(courseId).all(),
+      env.DB.prepare(
+        `SELECT s.id, s.course_offering_id, s.title, s.delivery_mode, s.starts_at, s.ends_at,
+          s.timezone, s.capacity, s.meeting_url, v.name AS venue_name, v.address_line_1
+         FROM course_sessions s LEFT JOIN venues v ON v.id = s.venue_id
+         JOIN course_offerings o ON o.id = s.course_offering_id
+         WHERE o.course_id = ? ORDER BY s.starts_at`
       ).bind(courseId).all()
     ]);
     return json({
@@ -650,8 +820,144 @@ async function tutorAuthoring(
       modules: modules.results,
       lessons: lessons.results,
       assessments: assessments.results,
-      flashcardDecks: decks.results
+      flashcardDecks: decks.results,
+      offerings: offerings.results,
+      materials: materials.results,
+      offeringModules: offeringModules.results,
+      offeringAssessments: offeringAssessments.results,
+      offeringDecks: offeringDecks.results,
+      offeringMaterials: offeringMaterials.results,
+      categories: categories.results,
+      sessions: sessions.results
     });
+  }
+
+  const courseOfferingMatch = pathname.match(/^\/api\/tutor\/courses\/([^/]+)\/offerings$/);
+  if (request.method === "POST" && courseOfferingMatch) {
+    const courseId = decodeURIComponent(courseOfferingMatch[1]);
+    const owned = await env.DB.prepare(
+      "SELECT 1 FROM courses WHERE id = ? AND (tutor_id = ? OR ? = 'admin')"
+    ).bind(courseId, actor.id, actor.role).first();
+    if (!owned) return problem(403, "course_forbidden", "You cannot edit this course.");
+    const input = await parseJson(request);
+    const offeringType = ["self_paced", "cohort", "event", "academic_term"].includes(String(input?.offeringType))
+      ? String(input?.offeringType) : "self_paced";
+    const deliveryMode = ["recorded", "live_online", "in_person", "hybrid"].includes(String(input?.deliveryMode))
+      ? String(input?.deliveryMode) : "recorded";
+    const academicYear = Number(input?.academicYear);
+    const termNumber = Number(input?.termNumber);
+    const title = text(input?.title, 2, 120);
+    const priceCents = Number(input?.priceCents);
+    const startsAt = typeof input?.startsAt === "string" && input.startsAt ? input.startsAt : null;
+    const endsAt = typeof input?.endsAt === "string" && input.endsAt ? input.endsAt : null;
+    const capacity = input?.capacity === null || input?.capacity === "" || input?.capacity === undefined
+      ? null : Number(input.capacity);
+    if (!title || !Number.isSafeInteger(priceCents) || priceCents < 50 ||
+        (capacity !== null && (!Number.isInteger(capacity) || capacity < 1)) ||
+        ((offeringType === "cohort" || offeringType === "event") && (!startsAt || !endsAt)) ||
+        (startsAt && endsAt && new Date(endsAt).getTime() <= new Date(startsAt).getTime()) ||
+        (offeringType === "academic_term" && (!Number.isInteger(academicYear) || academicYear < 2000 || academicYear > 2200 ||
+          !Number.isInteger(termNumber) || termNumber < 1 || termNumber > 12))) {
+      return problem(400, "invalid_offering", "Provide a valid offering type, schedule, title, capacity, and price.");
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const isAcademic = offeringType === "academic_term";
+    const internalYear = isAcademic ? academicYear : 3_000_000_000 + Number.parseInt(id.replace(/-/g, "").slice(0, 7), 16);
+    const internalTerm = isAcademic ? termNumber : 0;
+    const termId = isAcademic ? `academic-term-${academicYear}-${termNumber}` : `academic-term-general-${id}`;
+    const accessEndsAt = typeof input?.accessEndsAt === "string" && input.accessEndsAt ? input.accessEndsAt : endsAt;
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO academic_terms (id, academic_year, term_number, title, starts_at, ends_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(academic_year, term_number) DO NOTHING`
+      ).bind(termId, internalYear, internalTerm, isAcademic ? `Term ${termNumber}` : "Not applicable", startsAt, endsAt, now),
+      env.DB.prepare(
+        `INSERT INTO course_offerings
+          (id, course_id, academic_term_id, title, enrolment_opens_at, enrolment_closes_at,
+           access_ends_at, price_cents, currency, pricing_version, pricing_status, status,
+           offering_type, delivery_mode, starts_at, ends_at, timezone, capacity, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'SGD', 1, 'pending', 'draft', ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        id, courseId, termId, title,
+        typeof input?.enrolmentOpensAt === "string" && input.enrolmentOpensAt ? input.enrolmentOpensAt : null,
+        typeof input?.enrolmentClosesAt === "string" && input.enrolmentClosesAt ? input.enrolmentClosesAt : null,
+        accessEndsAt, priceCents, offeringType, deliveryMode, startsAt, endsAt,
+        typeof input?.timezone === "string" && input.timezone ? input.timezone.slice(0, 80) : "Asia/Singapore",
+        capacity, now, now
+      )
+    ]);
+    return json({ offering: {
+      id, courseId, title, offeringType, deliveryMode,
+      academicYear: isAcademic ? academicYear : null,
+      termNumber: isAcademic ? termNumber : null,
+      startsAt, endsAt, capacity, priceCents, status: "draft"
+    } }, { status: 201 });
+  }
+
+  const sessionMatch = pathname.match(/^\/api\/tutor\/offerings\/([^/]+)\/sessions$/);
+  if (request.method === "POST" && sessionMatch) {
+    const offeringId = decodeURIComponent(sessionMatch[1]);
+    const owned = await env.DB.prepare(
+      `SELECT o.course_id FROM course_offerings o JOIN courses c ON c.id = o.course_id
+       WHERE o.id = ? AND (c.tutor_id = ? OR ? = 'admin')`
+    ).bind(offeringId, actor.id, actor.role).first<{ course_id: string }>();
+    if (!owned) return problem(403, "offering_forbidden", "You cannot edit this offering.");
+    const input = await parseJson(request);
+    const title = text(input?.title, 2, 160);
+    const deliveryMode = input?.deliveryMode === "in_person" ? "in_person"
+      : input?.deliveryMode === "live_online" ? "live_online" : null;
+    const startsAt = typeof input?.startsAt === "string" ? input.startsAt : "";
+    const endsAt = typeof input?.endsAt === "string" ? input.endsAt : "";
+    const meetingUrl = typeof input?.meetingUrl === "string" && input.meetingUrl.trim() ? input.meetingUrl.trim() : null;
+    const venueName = text(input?.venueName, 2, 160);
+    const venueAddress = text(input?.venueAddress, 3, 300);
+    const capacity = input?.capacity === null || input?.capacity === "" || input?.capacity === undefined
+      ? null : Number(input.capacity);
+    if (!title || !deliveryMode || !startsAt || !endsAt ||
+        new Date(endsAt).getTime() <= new Date(startsAt).getTime() ||
+        (capacity !== null && (!Number.isInteger(capacity) || capacity < 1)) ||
+        (deliveryMode === "live_online" && !meetingUrl) ||
+        (deliveryMode === "in_person" && (!venueName || !venueAddress))) {
+      return problem(400, "invalid_session", "Provide a valid live or in-person session, schedule, and location.");
+    }
+    if (meetingUrl) {
+      try {
+        const parsed = new URL(meetingUrl);
+        if (parsed.protocol !== "https:") throw new Error("invalid");
+      } catch {
+        return problem(400, "invalid_meeting_url", "Use a secure HTTPS meeting URL.");
+      }
+    }
+    const now = new Date().toISOString();
+    const sessionId = crypto.randomUUID();
+    const venueId = deliveryMode === "in_person" ? crypto.randomUUID() : null;
+    const statements = [];
+    if (venueId) {
+      statements.push(env.DB.prepare(
+        `INSERT INTO venues
+          (id, owner_user_id, name, address_line_1, city, country_code, arrival_instructions, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'SG', ?, ?, ?)`
+      ).bind(
+        venueId, actor.id, venueName, venueAddress,
+        typeof input?.city === "string" && input.city.trim() ? input.city.trim().slice(0, 120) : "Singapore",
+        typeof input?.arrivalInstructions === "string" ? input.arrivalInstructions.slice(0, 1000) : "", now, now
+      ));
+    }
+    statements.push(env.DB.prepare(
+      `INSERT INTO course_sessions
+        (id, course_offering_id, instructor_user_id, title, delivery_mode, starts_at, ends_at,
+         timezone, capacity, meeting_url, meeting_provider, venue_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?)`
+    ).bind(
+      sessionId, offeringId, actor.id, title, deliveryMode, startsAt, endsAt,
+      typeof input?.timezone === "string" && input.timezone ? input.timezone.slice(0, 80) : "Asia/Singapore",
+      capacity, meetingUrl,
+      deliveryMode === "live_online" && typeof input?.meetingProvider === "string" ? input.meetingProvider.slice(0, 80) : null,
+      venueId, now, now
+    ));
+    await env.DB.batch(statements);
+    return json({ session: { id: sessionId, offeringId, title, deliveryMode, startsAt, endsAt } }, { status: 201 });
   }
   const courseModuleMatch = pathname.match(/^\/api\/tutor\/courses\/([^/]+)\/modules$/);
   if (request.method === "POST" && courseModuleMatch) {
@@ -665,9 +971,16 @@ async function tutorAuthoring(
     if (!title) return problem(400, "invalid_module", "Module title is required.");
     const id = crypto.randomUUID();
     const position = Number.isInteger(input?.position) ? Number(input?.position) : 1;
-    await env.DB.prepare(
+    const statements = [env.DB.prepare(
       "INSERT INTO course_modules (id, course_id, title, position, created_at) VALUES (?, ?, ?, ?, ?)"
-    ).bind(id, courseId, title, position, new Date().toISOString()).run();
+    ).bind(id, courseId, title, position, new Date().toISOString())];
+    if (typeof input?.offeringId === "string" && input.offeringId) {
+      statements.push(env.DB.prepare(
+        `INSERT INTO course_offering_modules (course_offering_id, module_id, position)
+         SELECT id, ?, ? FROM course_offerings WHERE id = ? AND course_id = ?`
+      ).bind(id, position, input.offeringId, courseId));
+    }
+    await env.DB.batch(statements);
     return json({ module: { id, courseId, title, position } }, { status: 201 });
   }
 
@@ -683,14 +996,27 @@ async function tutorAuthoring(
     const title = text(input?.title, 2, 120);
     const lessonType = ["video", "text", "document", "quiz", "live", "ai"].includes(String(input?.lessonType))
       ? String(input?.lessonType) : null;
+    const deliveryMode = ["recorded", "live_online", "in_person"].includes(String(input?.deliveryMode))
+      ? String(input?.deliveryMode) : lessonType === "live" ? "live_online" : "recorded";
     if (!title || !lessonType) return problem(400, "invalid_lesson", "Lesson title and type are required.");
+    const sessionId = typeof input?.sessionId === "string" && input.sessionId ? input.sessionId : null;
+    if (sessionId) {
+      const validSession = await env.DB.prepare(
+        `SELECT 1 FROM course_sessions s
+         JOIN course_offerings o ON o.id = s.course_offering_id
+         JOIN course_modules m ON m.course_id = o.course_id
+         WHERE s.id = ? AND m.id = ? AND s.delivery_mode = ?`
+      ).bind(sessionId, moduleId, deliveryMode).first();
+      if (!validSession) return problem(400, "invalid_lesson_session", "Choose a session from this course with the same delivery mode.");
+    }
     const id = crypto.randomUUID();
     const position = Number.isInteger(input?.position) ? Number(input?.position) : 1;
     const now = new Date().toISOString();
     await env.DB.prepare(
       `INSERT INTO lessons
-        (id, module_id, title, lesson_type, content_json, position, estimated_minutes, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (id, module_id, title, lesson_type, content_json, position, estimated_minutes,
+         delivery_mode, course_session_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(
       id,
       moduleId,
@@ -699,10 +1025,12 @@ async function tutorAuthoring(
       JSON.stringify(input?.content ?? {}),
       position,
       Number(input?.estimatedMinutes ?? 0) || null,
+      deliveryMode,
+      sessionId,
       now,
       now
     ).run();
-    return json({ lesson: { id, moduleId, title, lessonType, position } }, { status: 201 });
+    return json({ lesson: { id, moduleId, title, lessonType, deliveryMode, position } }, { status: 201 });
   }
 
   const assessmentMatch = pathname.match(/^\/api\/tutor\/courses\/([^/]+)\/assessments$/);
@@ -721,7 +1049,7 @@ async function tutorAuthoring(
     }
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    await env.DB.prepare(
+    const statements = [env.DB.prepare(
       `INSERT INTO assessments
         (id, course_id, lesson_id, created_by, assessment_type, title, instructions,
          time_limit_seconds, attempt_limit, passing_score, feedback_mode, status,
@@ -742,7 +1070,14 @@ async function tutorAuthoring(
         : input?.feedbackMode === "after_submission" ? "after_submission" : "immediate",
       now,
       now
-    ).run();
+    )];
+    if (typeof input?.offeringId === "string" && input.offeringId) {
+      statements.push(env.DB.prepare(
+        `INSERT INTO course_offering_assessments (course_offering_id, assessment_id, position)
+         SELECT id, ?, 1 FROM course_offerings WHERE id = ? AND course_id = ?`
+      ).bind(id, input.offeringId, courseId));
+    }
+    await env.DB.batch(statements);
     return json({ assessment: { id, courseId, title, assessmentType, status: "draft" } }, { status: 201 });
   }
 
@@ -758,7 +1093,7 @@ async function tutorAuthoring(
     if (!title) return problem(400, "invalid_deck", "Flashcard deck title is required.");
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    await env.DB.prepare(
+    const statements = [env.DB.prepare(
       `INSERT INTO flashcard_decks
         (id, course_id, lesson_id, created_by, title, description, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)`
@@ -771,8 +1106,91 @@ async function tutorAuthoring(
       typeof input?.description === "string" ? input.description.slice(0, 2000) : "",
       now,
       now
-    ).run();
+    )];
+    if (typeof input?.offeringId === "string" && input.offeringId) {
+      statements.push(env.DB.prepare(
+        `INSERT INTO course_offering_flashcard_decks (course_offering_id, deck_id, position)
+         SELECT id, ?, 1 FROM course_offerings WHERE id = ? AND course_id = ?`
+      ).bind(id, input.offeringId, courseId));
+    }
+    await env.DB.batch(statements);
     return json({ deck: { id, courseId, title, status: "draft" } }, { status: 201 });
+  }
+
+  const materialMatch = pathname.match(/^\/api\/tutor\/courses\/([^/]+)\/materials$/);
+  if (request.method === "POST" && materialMatch) {
+    const courseId = decodeURIComponent(materialMatch[1]);
+    const owned = await env.DB.prepare(
+      "SELECT 1 FROM courses WHERE id = ? AND (tutor_id = ? OR ? = 'admin')"
+    ).bind(courseId, actor.id, actor.role).first();
+    if (!owned) return problem(403, "course_forbidden", "You cannot edit this course.");
+    const input = await parseJson(request);
+    const title = text(input?.title, 2, 160);
+    const materialType = ["document", "video", "link", "download"].includes(String(input?.materialType))
+      ? String(input?.materialType) : null;
+    const storageKey = typeof input?.storageKey === "string" && input.storageKey.trim()
+      ? input.storageKey.trim().slice(0, 500) : null;
+    let externalUrl: string | null = null;
+    if (typeof input?.externalUrl === "string" && input.externalUrl.trim()) {
+      try {
+        const parsed = new URL(input.externalUrl.trim());
+        if (parsed.protocol === "https:" || parsed.protocol === "http:") externalUrl = parsed.toString();
+      } catch {
+        externalUrl = null;
+      }
+    }
+    if (!title || !materialType || (!storageKey && !externalUrl)) {
+      return problem(400, "invalid_material", "Provide a title, material type, and valid URL or R2 storage key.");
+    }
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const statements = [env.DB.prepare(
+      `INSERT INTO course_materials
+        (id, course_id, created_by, title, description, material_type, storage_key,
+         external_url, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'published', ?, ?)`
+    ).bind(
+      id, courseId, actor.id, title,
+      typeof input?.description === "string" ? input.description.slice(0, 2000) : "",
+      materialType, storageKey, externalUrl, now, now
+    )];
+    if (typeof input?.offeringId === "string" && input.offeringId) {
+      statements.push(env.DB.prepare(
+        `INSERT INTO course_offering_materials (course_offering_id, material_id, position)
+         SELECT id, ?, 1 FROM course_offerings WHERE id = ? AND course_id = ?`
+      ).bind(id, input.offeringId, courseId));
+    }
+    await env.DB.batch(statements);
+    return json({ material: { id, courseId, title, materialType, status: "published" } }, { status: 201 });
+  }
+
+  const assignContentMatch = pathname.match(/^\/api\/tutor\/offerings\/([^/]+)\/content$/);
+  if (request.method === "POST" && assignContentMatch) {
+    const offeringId = decodeURIComponent(assignContentMatch[1]);
+    const input = await parseJson(request);
+    const contentId = typeof input?.contentId === "string" ? input.contentId : "";
+    const kind = String(input?.kind ?? "");
+    const offering = await env.DB.prepare(
+      `SELECT o.course_id FROM course_offerings o JOIN courses c ON c.id = o.course_id
+       WHERE o.id = ? AND (c.tutor_id = ? OR ? = 'admin')`
+    ).bind(offeringId, actor.id, actor.role).first<{ course_id: string }>();
+    if (!offering) return problem(403, "offering_forbidden", "You cannot edit this course offering.");
+    const config = {
+      module: { table: "course_offering_modules", column: "module_id", source: "course_modules" },
+      material: { table: "course_offering_materials", column: "material_id", source: "course_materials" },
+      assessment: { table: "course_offering_assessments", column: "assessment_id", source: "assessments" },
+      flashcard_deck: { table: "course_offering_flashcard_decks", column: "deck_id", source: "flashcard_decks" }
+    }[kind];
+    if (!config || !contentId) return problem(400, "invalid_content", "Choose valid course content.");
+    const belongs = await env.DB.prepare(
+      `SELECT 1 FROM ${config.source} WHERE id = ? AND course_id = ?`
+    ).bind(contentId, offering.course_id).first();
+    if (!belongs) return problem(404, "content_not_found", "The content does not belong to this course.");
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO ${config.table} (course_offering_id, ${config.column}, position)
+       VALUES (?, ?, ?)`
+    ).bind(offeringId, contentId, Number(input?.position ?? 1) || 1).run();
+    return json({ assigned: true, offeringId, kind, contentId });
   }
 
   const questionMatch = pathname.match(/^\/api\/tutor\/assessments\/([^/]+)\/questions$/);
@@ -911,6 +1329,8 @@ export async function handleJourneyRequest(
   if (request.method === "GET" && deckId) return flashcardDeck(request, env, deckId);
   const cardId = matchId(pathname, /^\/api\/flashcards\/([^/]+)\/review$/);
   if (request.method === "POST" && cardId) return reviewFlashcard(request, env, cardId);
+  const materialId = matchId(pathname, /^\/api\/materials\/([^/]+)$/);
+  if (request.method === "GET" && materialId) return courseMaterial(request, env, materialId);
   if (pathname.startsWith("/api/tutor/") && (request.method === "GET" || request.method === "POST")) {
     return tutorAuthoring(request, env, pathname);
   }

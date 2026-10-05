@@ -6,7 +6,7 @@ const { course } = Astro.props;
 
 <article class={`course-card accent-${course.accent}`}>
   <a class="course-visual" href={`/courses/${course.slug}`} aria-label={`View ${course.title}`}>
-    <span class="subject-pill">{course.subject}</span>
+    <span class="subject-pill">{course.categories[0] ?? course.subject}</span>
     <span class="course-mark" aria-hidden="true">{course.subject.slice(0, 1)}</span>
     <span class="level">{course.level}</span>
   </a>
@@ -20,4 +20,3 @@ const { course } = Astro.props;
     </div>
   </div>
 </article>
-

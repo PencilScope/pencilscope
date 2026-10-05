@@ -1,6 +1,6 @@
 # PencilScope
 
-PencilScope is a child-friendly online tuition marketplace for Singapore primary-school learners. This repository contains the first Astro + Cloudflare implementation foundation.
+PencilScope is an open learning marketplace for recorded courses, live online learning and in-person training. It supports academic and enrichment courses, professional and personal development, masterclasses, workshops, seminars and community knowledge sharing.
 
 ## Included
 
@@ -14,13 +14,17 @@ PencilScope is a child-friendly online tuition marketplace for Singapore primary
 - Private API Worker connected to the Astro web Worker with a Service Binding
 - API-owned R2, Queue, D1, Stripe and Resend bindings
 - Health endpoint at `/api/health`
-- Parent and tutor registration with session-backed sign-in
+- Parent and creator registration with session-backed sign-in
 - Parent-managed learner profiles and role-aware dashboards
 - Stripe payment-to-enrolment entitlement assignment
 - Protected course modules, lessons and progress tracking
 - A shared quiz, test and mock-exam engine with automatic choice grading
 - Spaced-repetition flashcard review
-- Tutor studio for courses, modules, lessons, assessments and flashcards
+- Creator studio available to every active account
+- Configurable course categories and creator memberships
+- Self-paced, cohort, event and academic-term offerings with independent Stripe prices
+- Recorded lessons, live online sessions, in-person venues, attendance and capacity
+- Offering-specific modules, materials, quizzes, tests, mock exams and flashcards
 
 ## Local setup
 
@@ -32,7 +36,7 @@ Requirements: Node.js 22.12 or newer and pnpm.
 4. Start the API Worker with `pnpm api:dev`.
 5. In a second terminal, start the Astro web Worker with `pnpm dev`.
 
-The catalogue renders sample content before D1 is initialised. Publishing a course from the tutor studio creates its Stripe Product and one-time Price. Checkout requires migrated D1 data, Stripe test credentials and an approved tutor account.
+The catalogue renders sample content before D1 is initialised. Publishing a paid offering from the creator studio creates or reuses the course's Stripe Product and creates an immutable one-time Price for that offering. Checkout requires migrated D1 data and Stripe test credentials.
 
 ## Cloudflare environments
 
@@ -79,26 +83,32 @@ Configure separate Stripe webhook endpoints for:
 
 Student accounts can use the same learning endpoints directly. Parent access to progress, assessments and flashcards is limited to linked learner profiles.
 
-### Tutor
+### Creator
 
-New tutor registrations are pending until `tutor_profiles.verification_status` is changed to `approved` by an administrator. Approved tutors use `/tutor` to create draft courses and add:
+Every active account can use `/tutor` (the current creator-studio URL) to create a course. A creator can add:
 
-- ordered modules and lessons;
+- self-paced, cohort, event and academic-term offerings;
+- recorded, live online and in-person lessons;
+- scheduled online sessions, venues and capacity limits;
+- ordered modules, materials and lessons;
 - quizzes, tests and mock exams with choice questions;
 - flashcard decks and cards.
 
-Assessments and decks must contain content before they can be published. Course publication provisions Stripe pricing automatically.
+Academic term details are required only for an `academic_term` offering. Each published offering has its own price and entitlement. Assessments and decks must contain content before they can be published.
 
-### Tutor course pricing API
+### Creator pricing API
 
-All tutor endpoints require an authenticated approved tutor (or admin) session.
+Creator endpoints require an active authenticated account that owns the course. The `/api/tutor/*` path is retained for backward compatibility while the user interface calls it the Creator Studio.
 
 - `POST /api/tutor/courses` creates a draft. Send `publish: true` to create its Stripe Product and first one-time Price immediately.
 - `POST /api/tutor/courses/:id/publish` publishes an existing draft and provisions its Stripe pricing.
 - `PATCH /api/tutor/courses/:id/pricing` creates a new versioned Stripe Price for a published course and archives the previous Price.
+- `POST /api/tutor/courses/:id/offerings` creates a bookable course offering.
+- `POST /api/tutor/offerings/:id/publish` publishes an offering and provisions its Stripe Price.
+- `POST /api/tutor/offerings/:id/sessions` schedules a live online or in-person session.
 
 Stripe creation calls use stable idempotency keys. A failed sync leaves the course unpublished with `pricing_status = 'failed'`, allowing a safe retry. Drafts do not create Stripe resources until publication.
 
 ## Remaining production work
 
-The implemented journeys are an MVP. Before a public launch, add an administrator approval console, password reset and email verification, tutor review/moderation, manual grading for written responses, certificates, live-class provider integration, notification emails and a full automated browser test suite.
+The implemented journeys are an MVP. Before a public marketplace launch, add creator identity and course moderation, Stripe Connect payouts, password reset and email verification, refunds and cancellation policies, manual grading, certificates, calendar/meeting-provider integration, reminder emails and a full automated browser test suite.

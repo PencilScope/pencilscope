@@ -5,10 +5,10 @@ import { listPublishedCourses } from "@/lib/api-client";
 const courses = await listPublishedCourses();
 ---
 
-<BaseLayout title="Explore courses — PencilScope" description="Explore trusted primary-school tuition courses for Singapore learners.">
-  <section class="page-hero shell"><span class="eyebrow">Explore learning</span><h1>Find their next <em>favourite subject.</em></h1><p>Clear explanations, meaningful practice and caring guidance—from the first lesson to the proud finish.</p></section>
+<BaseLayout title="Explore courses — PencilScope" description="Explore courses, workshops, seminars and masterclasses for every kind of learner.">
+  <section class="page-hero shell"><span class="eyebrow">Explore learning</span><h1>Learn something <em>worth sharing.</em></h1><p>Discover self-paced courses, live cohorts, workshops, seminars and in-person experiences created by people with knowledge to share.</p></section>
   <section class="shell catalogue-section">
-    <div class="filter-bar" aria-label="Course filters"><button class="filter active" type="button">All courses</button><button class="filter" type="button">Mathematics</button><button class="filter" type="button">Science</button><button class="filter" type="button">English</button><span class="result-count">{courses.length} courses</span></div>
+    <div class="filter-bar" aria-label="Course categories"><span class="filter active">All learning</span><span class="filter">Academic</span><span class="filter">Enrichment</span><span class="filter">Masterclasses</span><span class="filter">Seminars</span><span class="result-count">{courses.length} courses</span></div>
     <div class="course-grid">{courses.map((course) => <CourseCard course={course} />)}</div>
   </section>
 </BaseLayout>
