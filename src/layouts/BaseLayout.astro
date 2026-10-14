@@ -1,12 +1,74 @@
 ---
 import "@/styles/global.css";
 import "@/styles/journeys.css";
-type Props = { title?: string; description?: string };
+import { requestApi } from "@/lib/api-client";
+import ProductIcon from "@/components/ProductIcon.astro";
+import { creatorProductCatalogue } from "@/lib/product-catalog";
+type Props = {
+  title?: string;
+  description?: string;
+  canonicalUrl?: string;
+  socialImage?: string;
+  socialType?: "website" | "article";
+};
 const {
   title = "PencilScope — Learn brightly",
-  description = "Recorded, live online and in-person courses created by people with knowledge to share."
+  description = "Courses, ebooks, quizzes, mock exams, videos and more—created by people with knowledge to share.",
+  canonicalUrl = `${Astro.url.origin}${Astro.url.pathname}`,
+  socialImage = "/social-card.svg",
+  socialType = "website"
 } = Astro.props;
-const signedIn = typeof await Astro.session?.get("userId") === "string";
+const sessionUserId = await Astro.session?.get("userId");
+const signedIn = typeof sessionUserId === "string";
+type HeaderNotification = {
+  id: string; title: string; body: string; category: string; priority: string;
+  action_url: string | null; delivered_at: string; read_at: string | null;
+};
+let headerNotifications: HeaderNotification[] = [];
+let unreadNotificationCount = 0;
+let unreadMessageCount = 0;
+let pendingConnectionCount = 0;
+let headerUser = { displayName: "My profile", email: "", avatarAssetId: null as string | null, billingAccess: false };
+if (signedIn) {
+  try {
+    const navigationResponse = await requestApi("/api/navigation-state", { userId: sessionUserId });
+    if (navigationResponse.ok) {
+      const payload = await navigationResponse.json<{
+        user: { displayName: string; email: string; avatarAssetId: string | null; billingAccess: boolean };
+        notifications: HeaderNotification[];
+        unreadNotificationCount: number;
+        unreadMessageCount: number;
+        pendingConnectionCount: number;
+      }>();
+      headerNotifications = payload.notifications;
+      unreadNotificationCount = payload.unreadNotificationCount;
+      unreadMessageCount = payload.unreadMessageCount;
+      pendingConnectionCount = payload.pendingConnectionCount;
+      headerUser = payload.user;
+    }
+  } catch {
+    // Navigation should remain available if notification loading is temporarily unavailable.
+  }
+}
+const socialImageUrl = new URL(socialImage, Astro.url.origin).toString();
+const currentPath = Astro.url.pathname.replace(/\/$/, "") || "/";
+const currentWorkspace = Astro.url.searchParams.get("workspace");
+const creatorContext = signedIn && (
+  currentPath === "/create" || currentPath === "/ebook-studio" || currentPath === "/content-library" || currentPath.startsWith("/tutor") ||
+  (currentPath === "/dashboard" && currentWorkspace === "creation")
+);
+const createFlowActive = creatorContext && (currentPath === "/create" || currentPath === "/ebook-studio");
+const learningContext = signedIn && (
+  (currentPath === "/dashboard" && currentWorkspace === "learning") || currentPath === "/my-learning" ||
+  currentPath === "/my-results" || currentPath.startsWith("/learn/") || currentPath.startsWith("/assessment/")
+);
+const networkContext = signedIn && (currentPath === "/network" || currentPath === "/connections" || currentPath === "/messages");
+const workspaceThemeColor = creatorContext ? "#047857" : learningContext ? "#1d4ed8" : networkContext ? "#6d28d9" : "#102a56";
+const nameParts = headerUser.displayName.trim().split(/\s+/).filter(Boolean);
+const profileInitials = nameParts.length > 1
+  ? `${nameParts[nameParts.length - 1][0]}${nameParts[0][0]}`.toUpperCase()
+  : (nameParts[0]?.[0] ?? "U").toUpperCase();
+const createOptions = creatorProductCatalogue;
 ---
 
 <!doctype html>
@@ -15,39 +77,131 @@ const signedIn = typeof await Astro.session?.get("userId") === "string";
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#17372b" />
+    <meta name="theme-color" content={workspaceThemeColor} />
+    <link rel="canonical" href={canonicalUrl} />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta property="og:site_name" content="PencilScope" />
+    <meta property="og:type" content={socialType} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:image" content={socialImageUrl} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={socialImageUrl} />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet" />
     <title>{title}</title>
   </head>
-  <body>
+  <body class:list={{ "signed-in": signedIn, "creator-context": creatorContext, "learning-context": learningContext, "network-context": networkContext }}>
     <header class="site-header">
       <div class="shell nav-wrap">
-        <a class="brand" href="/" aria-label="PencilScope home"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span>PencilScope</span></a>
-        <nav aria-label="Primary navigation"><a href="/courses">Explore courses</a><a href="/#how-it-works">How it works</a><a href="/tutor">Create a course</a></nav>
+        <a class="brand" href="/" aria-label="PencilScope home"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand-copy"><strong>PencilScope</strong><small>Building smarter world</small></span></a>
+        <nav aria-label="Primary navigation"><a href="/library">Explore</a><a href="/courses">Courses</a>{!signedIn && <a href="/#how-it-works">How it works</a>}</nav>
+        {learningContext && <span class="nav-context-marker learning-context-marker" aria-label="Learning workspace"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.5 12 3l8 2.5v11L12 19l-8-2.5Z"/><path d="M12 3v16"/></svg>Learning mode</span>}
+        {creatorContext && <span class="nav-context-marker creator-context-marker" aria-label="Creation workspace"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z"/><path d="m13.8 7.2 3 3"/></svg>Creation mode</span>}
+        {networkContext && <span class="nav-context-marker network-context-marker" aria-label="Network workspace"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="7" r="2.5"/><path d="M3.5 19c.5-4 2-6 4.5-6s4 2 4.5 6M13 14c1-.9 2.2-1.4 3.7-1.4 2.2 0 3.5 1.5 3.8 4.4"/></svg>Network</span>}
         <div class="nav-actions">
           {signedIn ? (
             <>
-              <a class="login-link" href="/dashboard">Dashboard</a>
-              <form action="/api/auth/logout" method="post"><button class="link-button" type="submit">Sign out</button></form>
+              <a class:list={["workspace-nav-link", { active: learningContext }]} aria-current={learningContext ? "page" : undefined} href="/dashboard?workspace=learning">My Learning</a>
+              <a class:list={["workspace-nav-link", "creation-workspace-link", { active: creatorContext }]} aria-current={creatorContext && !createFlowActive ? "page" : undefined} href="/dashboard?workspace=creation">My Creations</a>
+              <a class:list={["workspace-nav-link", "network-workspace-link", { active: networkContext }]} aria-current={networkContext ? "page" : undefined} href="/network">Network{pendingConnectionCount > 0 && <b class="workspace-count">{pendingConnectionCount > 99 ? "99+" : pendingConnectionCount}</b>}</a>
+              <details class="create-nav-menu"><summary class:list={["creator-nav-link", { active: createFlowActive }]} aria-label="Create learning content" aria-current={createFlowActive ? "page" : undefined}>Create <span aria-hidden="true">⌄</span></summary><div class="create-nav-popover">{createOptions.map((option) => <a href={option.href}><ProductIcon name={option.key} size="small" /><span><strong>{option.label}</strong><small>{option.shortDescription}</small></span></a>)}</div></details>
+              <a class:list={["nav-icon", { "has-unread": unreadMessageCount > 0 }]} href="/network?section=messages" aria-label={`Messages${unreadMessageCount ? `, ${unreadMessageCount} unread` : ""}`} data-message-nav>
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5.75h14a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H9l-4.75 3v-3.2A2 2 0 0 1 3 16.25v-8.5a2 2 0 0 1 2-2Z"/><path d="M7.5 10h9M7.5 14h6"/></svg>
+                <b data-message-count hidden={unreadMessageCount === 0}>{unreadMessageCount > 99 ? "99+" : unreadMessageCount}</b>
+              </a>
+              <details class="notification-menu">
+                <summary class:list={["nav-icon", { "has-unread": unreadNotificationCount > 0 }]} aria-label={`Notifications${unreadNotificationCount ? `, ${unreadNotificationCount} unread` : ""}`} data-notification-nav>
+                  <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 8.5h18C21 16 18 16 18 9Z"/><path d="M9.5 20h5"/></svg>
+                  <b data-notification-count hidden={unreadNotificationCount === 0}>{unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}</b>
+                </summary>
+                <div class="notification-popover">
+                  <div class="notification-popover-heading"><strong>Notifications</strong><a href="/notifications">View all</a></div>
+                  {headerNotifications.length ? headerNotifications.map((notification) => (
+                    <a class:list={["notification-preview", { unread: !notification.read_at }]} href={notification.action_url ?? "/notifications"} data-header-notification={notification.id}>
+                      <span>{notification.category}</span><strong>{notification.title}</strong><small>{notification.body}</small>
+                    </a>
+                  )) : <p>No notifications yet.</p>}
+                </div>
+              </details>
+              <details class="profile-menu">
+                <summary aria-label="Open account menu">
+                  <span class="profile-trigger-avatar">{headerUser.avatarAssetId ? <img src={`/api/media/${headerUser.avatarAssetId}`} alt="" /> : <span>{profileInitials}</span>}</span>
+                  <span class="profile-trigger-name">{headerUser.displayName}</span><span class="profile-trigger-arrow" aria-hidden="true">⌄</span>
+                </summary>
+                <div class="profile-popover">
+                  <div class="profile-popover-identity"><strong>{headerUser.displayName}</strong><small>{headerUser.email}</small></div>
+                  <a href="/profile">Profile</a><a href="/onboarding">Preferences</a><a href="/action-history">Action history</a><a href="/network">Network{pendingConnectionCount > 0 && <b>{pendingConnectionCount}</b>}</a><a href="/payments">Payments</a>{headerUser.billingAccess && <a href="/admin/billing">Billing operations</a>}
+                  <form action="/api/auth/logout" method="post"><button type="submit">Sign out</button></form>
+                </div>
+              </details>
             </>
           ) : (
-            <a class="login-link" href="/sign-in">Sign in</a>
+            <>
+              <a class="login-link" href="/sign-in">Log in</a>
+              <a class="creator-nav-link" href="/register?next=/create">Create</a>
+              <a class="button button-small" href="/register">Sign up</a>
+            </>
           )}
-          <a class="button button-small" href="/courses">Start learning</a>
         </div>
       </div>
     </header>
+    {signedIn && <nav class="mobile-app-nav" aria-label="Mobile navigation">
+      <a href="/library"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h7v14H4zM13 5h7v14h-7z"/><path d="M7 9h1M16 9h1"/></svg><span>Explore</span></a>
+      <a class:list={{ active: learningContext }} aria-current={learningContext ? "page" : undefined} href="/dashboard?workspace=learning"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.5 12 3l8 2.5v11L12 19l-8-2.5Z"/><path d="M12 3v16"/></svg><span>Learning</span></a>
+      <a class:list={["mobile-create", { active: createFlowActive }]} aria-current={createFlowActive ? "page" : undefined} href="/create"><span aria-hidden="true">＋</span><small>Create</small></a>
+      <a class:list={{ active: creatorContext }} aria-current={creatorContext && !createFlowActive ? "page" : undefined} href="/dashboard?workspace=creation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Creations</span></a>
+      <a class:list={{ active: networkContext, "has-unread": unreadMessageCount > 0 }} aria-current={networkContext ? "page" : undefined} href="/network"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="7" r="2.5"/><path d="M3.5 19c.5-4 2-6 4.5-6s4 2 4.5 6M13 14c1-.9 2.2-1.4 3.7-1.4 2.2 0 3.5 1.5 3.8 4.4"/></svg><span>Network</span><b data-mobile-message-count hidden={unreadMessageCount === 0}>{unreadMessageCount > 99 ? "99+" : unreadMessageCount}</b></a>
+    </nav>}
     <main><slot /></main>
     <footer class="site-footer">
       <div class="shell footer-grid">
-        <div><a class="brand brand-footer" href="/"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span>PencilScope</span></a><p>Curious minds grow here.</p></div>
-        <div><strong>Learn</strong><a href="/courses">All courses</a><a href="/courses?mode=live">Live classes</a><a href="/courses?mode=self-paced">Self-paced</a></div>
-        <div><strong>Company</strong><a href="/tutor">Create with us</a><a href="mailto:hello@pencilscope.sg">Contact</a><a href="/privacy">Privacy</a></div>
+        <div><a class="brand brand-footer" href="/"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand-copy"><strong>PencilScope</strong><small>Building smarter world</small></span></a><p>Curious minds grow here.</p></div>
+        <div><strong>Learn</strong><a href="/library">Learning library</a><a href="/courses">All courses</a><a href="/my-learning">My learning</a><a href="/my-results">My results</a></div>
+        <div><strong>Create</strong><a href="/create">Create content</a><a href="/tutor?mode=new">Create a course</a><a href="/privacy">Privacy</a></div>
         <div class="footer-note"><span>Created for curious people everywhere</span><span>© {new Date().getFullYear()} PencilScope</span></div>
       </div>
     </footer>
   </body>
 </html>
+
+<script>
+  const setBadge = (selector: string, value: number) => {
+    document.querySelectorAll<HTMLElement>(selector).forEach((badge) => {
+      badge.textContent = value > 99 ? "99+" : String(value);
+      badge.hidden = value === 0;
+      badge.closest(".nav-icon, a")?.classList.toggle("has-unread", value > 0);
+    });
+  };
+  document.querySelectorAll<HTMLElement>("[data-header-notification]").forEach((link) => {
+    link.addEventListener("click", () => {
+      const id = link.dataset.headerNotification;
+      if (id) {
+        fetch(`/api/notifications/${encodeURIComponent(id)}/click`, { method: "POST", keepalive: true }).finally(refreshNavigation);
+        link.classList.remove("unread");
+      }
+    });
+  });
+  const refreshNavigation = async () => {
+    if (document.hidden || !document.body.classList.contains("signed-in")) return;
+    try {
+      const response = await fetch("/api/navigation-state", { headers: { accept: "application/json" } });
+      if (!response.ok) return;
+      const state = await response.json() as {
+        unreadNotificationCount?: number;
+        unreadMessageCount?: number;
+      };
+      setBadge("[data-notification-count]", Number(state.unreadNotificationCount ?? 0));
+      setBadge("[data-message-count], [data-mobile-message-count]", Number(state.unreadMessageCount ?? 0));
+    } catch {
+      // Keep the existing navigation usable while the connection recovers.
+    }
+  };
+  window.addEventListener("pencilscope:messages-read", refreshNavigation);
+  document.addEventListener("visibilitychange", refreshNavigation);
+  window.setInterval(refreshNavigation, 30000);
+</script>

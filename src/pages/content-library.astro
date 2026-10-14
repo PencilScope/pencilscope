@@ -1,0 +1,315 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/content-library");
+type Folder = { id: string; name: string; item_count: number };
+type LibraryItem = {
+  id: string; folderId: string | null; folderName: string | null;
+  itemKind: "file" | "link" | "note"; mediaType: "video" | "audio" | "image" | "document" | "link" | "note";
+  title: string; description: string; originalFilename: string | null; sourceUrl: string | null;
+  noteText: string | null; tags: string[]; status: string; sizeBytes: number; mimeType: string | null;
+  usageCount: number; contentUrl: string | null; createdAt: string; updatedAt: string;
+  currentVersion: number | null; versionCount: number; deletedAt: string | null; recoverableUntil: string | null;
+};
+type StorageSummary = {
+  usedBytes: number; includedBytes: number; blockBytes: number; quotaBytes: number; remainingBytes: number;
+  usagePercent: number; additionalBlocks: number; pricePerBlockCents: number; currency: string;
+  subscriptionStatus: string; currentPeriodEnd: string | null; cancelAtPeriodEnd: boolean;
+  graceEndsAt: string | null; canUpload: boolean;
+};
+type UploadPolicy = {
+  maxBytesByType: { image: number; document: number; audio: number; video: number };
+  directUploadThresholdBytes: number; partSizeBytes: number; resumeHours: number; acceptedExtensions: string[];
+};
+type LibraryPayload = { items: LibraryItem[]; folders: Folder[]; totals: { itemCount: number; storageBytes: number }; storage: StorageSummary; uploadPolicy: UploadPolicy };
+const search = (Astro.url.searchParams.get("q") ?? "").trim().slice(0, 120);
+const requestedType = Astro.url.searchParams.get("type") ?? "all";
+const type = ["all", "image", "document", "video", "audio", "link", "note"].includes(requestedType) ? requestedType : "all";
+const requestedStatus = Astro.url.searchParams.get("status");
+const status = requestedStatus === "archived" || requestedStatus === "deleted" ? requestedStatus : "active";
+const folder = (Astro.url.searchParams.get("folder") ?? "").slice(0, 80);
+const params = new URLSearchParams({ status });
+if (search) params.set("q", search);
+if (type !== "all") params.set("type", type);
+if (folder) params.set("folder", folder);
+const response = await requestApi("/api/creator/content-library?" + params.toString(), { userId });
+if (response.status === 401) return Astro.redirect("/sign-in?next=/content-library");
+const defaultStorage: StorageSummary = { usedBytes: 0, includedBytes: 5_000_000_000, blockBytes: 10_000_000_000, quotaBytes: 5_000_000_000, remainingBytes: 5_000_000_000, usagePercent: 0, additionalBlocks: 0, pricePerBlockCents: 500, currency: "SGD", subscriptionStatus: "none", currentPeriodEnd: null, cancelAtPeriodEnd: false, graceEndsAt: null, canUpload: true };
+const defaultUploadPolicy: UploadPolicy = { maxBytesByType: { image: 250_000_000, document: 250_000_000, audio: 1_000_000_000, video: 2_000_000_000 }, directUploadThresholdBytes: 50_000_000, partSizeBytes: 10 * 1024 * 1024, resumeHours: 24, acceptedExtensions: [".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf", ".txt", ".md", ".markdown", ".mp3", ".m4a", ".ogg", ".oga", ".wav", ".mp4", ".m4v", ".webm", ".wmv"] };
+const library: LibraryPayload = response.ok ? await response.json() : { items: [], folders: [], totals: { itemCount: 0, storageBytes: 0 }, storage: defaultStorage, uploadPolicy: defaultUploadPolicy };
+library.storage ??= defaultStorage;
+library.uploadPolicy ??= defaultUploadPolicy;
+const formatBytes = (bytes: number) => bytes >= 1024 * 1024
+  ? (bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1) + " MB"
+  : bytes >= 1024 ? Math.round(bytes / 1024) + " KB" : bytes + " B";
+const createType = (item: LibraryItem) => item.mediaType === "audio" ? "audio" : item.mediaType === "video" ? "video" : "ebook";
+const isWmv = (item: LibraryItem) => item.mimeType === "video/x-ms-wmv" || item.mimeType === "video/x-ms-asf" || item.originalFilename?.toLowerCase().endsWith(".wmv");
+const uploadLimitsText = "Images and documents up to " + formatBytes(library.uploadPolicy.maxBytesByType.image) + ", audio up to " + formatBytes(library.uploadPolicy.maxBytesByType.audio) + ", and video up to " + formatBytes(library.uploadPolicy.maxBytesByType.video) + ".";
+const formatPlanPrice = (cents: number, currency: string) => new Intl.NumberFormat("en-SG", { style: "currency", currency, maximumFractionDigits: 0 }).format(cents / 100);
+const storageBlockOptions = Array.from({ length: 20 }, (_, index) => index + 1).filter((blocks) => blocks > library.storage.additionalBlocks);
+const storageTotalGb = (blocks: number) => (library.storage.includedBytes + blocks * library.storage.blockBytes) / 1_000_000_000;
+const storageMessage = Astro.url.searchParams.get("storage") === "success" ? "Payment received. Your additional storage is being activated." : Astro.url.searchParams.get("storage") === "updated" ? "Your storage capacity has been updated." : Astro.url.searchParams.get("storage") === "cancelled" ? "Storage checkout was cancelled. Your current allowance is unchanged." : "";
+const filters = [
+  { key: "all", label: "All content", icon: "▦" }, { key: "image", label: "Images", icon: "▧" },
+  { key: "document", label: "Documents", icon: "▤" }, { key: "video", label: "Videos", icon: "▶" },
+  { key: "audio", label: "Audio", icon: "♫" }, { key: "link", label: "Links", icon: "↗" },
+  { key: "note", label: "Notes", icon: "✎" }
+];
+---
+<BaseLayout title="Content Library — PencilScope" description="Your private creator files, references and reusable learning assets.">
+  <section class="dashboard-hero dashboard-hero-compact creator-library-hero"><div class="shell dashboard-hero-row"><div><span class="eyebrow">My Creation workspace</span><h1>Content Library</h1><p>Keep source files and references private, organised and ready to reuse across your products.</p></div><div class="dashboard-hero-actions"><button class="button button-secondary button-small" type="button" data-open-reference>Add reference</button><button class="button button-small" type="button" data-open-upload disabled={!library.storage.canUpload}>＋ Upload content</button></div></div></section>
+  <section class="shell workspace-dashboard-layout creator-library-layout">
+    <aside class="panel dashboard-sidebar library-sidebar">
+      <div class="dashboard-nav-group"><span>Creation workspace</span><nav class="dashboard-side-links"><a href="/dashboard?workspace=creation&section=overview">Overview</a><a href="/dashboard?workspace=creation&section=content">All products</a><a class="active" aria-current="page" href="/content-library">Content Library <b>{library.totals.itemCount}</b></a><a href="/dashboard?workspace=creation&section=course-studio">Course studio</a><a href="/dashboard?workspace=creation&section=payments">Payments</a></nav></div>
+      <div class="dashboard-nav-group"><span>Folders</span><nav class="dashboard-side-links"><a class:list={{ active: !folder }} href={"/content-library?type=" + type + "&status=" + status}>All folders</a>{library.folders.map((entry) => <a class:list={{ active: folder === entry.id }} href={"/content-library?folder=" + entry.id + "&type=" + type + "&status=" + status}>{entry.name}<b>{entry.item_count}</b></a>)}</nav><form class="library-folder-form" data-folder-form><input name="name" maxlength="80" required placeholder="New folder name" /><button type="submit" aria-label="Create folder">＋</button><p class="form-message" aria-live="polite"></p></form></div>
+      <p class="network-privacy-note"><strong>Private by default</strong>Files are available only to you until attached to content that a learner is authorised to access.</p>
+    </aside>
+    <main class="dashboard-content creator-library-main">
+      {storageMessage && <p class:list={["library-storage-notice", Astro.url.searchParams.get("storage") === "cancelled" && "neutral"]} role="status">{storageMessage}</p>}
+      <article class:list={["panel", "library-storage-card", library.storage.usagePercent >= 90 && "near-limit", !library.storage.canUpload && "at-limit"]}>
+        <div class="library-storage-heading"><div><span class="eyebrow">My Content Library storage</span><h2>{formatBytes(library.storage.usedBytes)} of {(library.storage.quotaBytes / 1_000_000_000).toFixed(0)} GB used</h2><p>Every retained version counts toward storage. Deleted files remain recoverable for seven days before their storage is released.</p></div><strong>{library.storage.usagePercent}%</strong></div>
+        <progress max="100" value={library.storage.usagePercent} aria-label={`${library.storage.usagePercent}% of storage used`}></progress>
+        <div class="library-storage-meta"><span><b>{formatBytes(library.storage.remainingBytes)}</b> available</span><span><b>{library.storage.additionalBlocks ? `Storage Plus × ${library.storage.additionalBlocks}` : "Included storage"}</b>{library.storage.currentPeriodEnd ? ` · renews ${new Date(library.storage.currentPeriodEnd).toLocaleDateString("en-SG")}` : ""}</span></div>
+        {!library.storage.canUpload && <p class="library-quota-warning">Storage is full. Existing content remains available, but new uploads are paused until you upgrade or deleted files finish their seven-day recovery window.</p>}
+        <div class="library-storage-actions">
+          {storageBlockOptions.length > 0 && <form data-storage-checkout><label><span>Add 10 GB for {formatPlanPrice(library.storage.pricePerBlockCents, library.storage.currency)}/month per unit</span><select name="blocks">{storageBlockOptions.map((blocks) => <option value={blocks}>{storageTotalGb(blocks)} GB total · {formatPlanPrice(blocks * library.storage.pricePerBlockCents, library.storage.currency)}/month</option>)}</select></label><button class="button button-small" type="submit">Upgrade securely</button><p class="form-message" aria-live="polite"></p></form>}
+          {library.storage.additionalBlocks > 0 && <button class="button button-small button-secondary" type="button" data-storage-portal>Manage billing</button>}
+        </div>
+      </article>
+      <div class="library-storage-summary"><section><small>Private items</small><strong>{library.totals.itemCount}</strong></section><section><small>Storage used</small><strong>{formatBytes(library.totals.storageBytes)}</strong></section><section><small>Shown now</small><strong>{library.items.length}</strong></section></div>
+      <article class="panel dashboard-section-panel creator-library-panel">
+        <div class="dashboard-section-heading"><div><span class="eyebrow">Reusable sources</span><h2>{status === "deleted" ? "Recently deleted" : status === "archived" ? "Archived content" : folder ? library.folders.find((entry) => entry.id === folder)?.name ?? "Folder" : "Your private content"}</h2><p>{status === "deleted" ? "Recover unused content for seven days after deletion." : "Upload once, then reuse the same source in multiple products."}</p></div><div><a class="text-link" href={status === "active" ? "/content-library?status=archived" : "/content-library"}>{status === "active" ? "View archive" : "View active content"} →</a>{status !== "deleted" && <><span> · </span><a class="text-link" href="/content-library?status=deleted">Recently deleted →</a></>}</div></div>
+        <form class="creator-library-toolbar" method="get"><input type="hidden" name="status" value={status} />{folder && <input type="hidden" name="folder" value={folder} />}<label><span>Search</span><input type="search" name="q" value={search} placeholder="Title, filename, description or tag" /></label><button class="button button-small" type="submit">Search</button></form>
+        <nav class="library-type-filters" aria-label="Filter content type">{filters.map((entry) => { const query = new URLSearchParams({ status }); if (entry.key !== "all") query.set("type", entry.key); if (folder) query.set("folder", folder); if (search) query.set("q", search); return <a class:list={{ active: type === entry.key }} href={"/content-library?" + query.toString()}><span>{entry.icon}</span>{entry.label}</a>; })}</nav>
+        {library.items.length ? <div class="creator-library-grid">{library.items.map((item) => <article class="creator-library-card" data-library-card={item.id}>
+          <div class:list={["library-preview", "preview-" + item.mediaType]}>
+            {item.mediaType === "image" && item.contentUrl ? <img src={item.contentUrl} alt="" loading="lazy" /> : item.mediaType === "video" && item.contentUrl && !isWmv(item) ? <video controls preload="metadata" src={item.contentUrl}></video> : item.mediaType === "audio" && item.contentUrl ? <div class="audio-preview"><span>♫</span><audio controls preload="metadata" src={item.contentUrl}></audio></div> : item.mediaType === "document" && item.mimeType === "application/pdf" && item.contentUrl ? <iframe src={item.contentUrl} title={item.title} loading="lazy"></iframe> : <span class="library-type-symbol">{filters.find((entry) => entry.key === item.mediaType)?.icon ?? "◆"}</span>}
+          </div>
+          <div class="library-card-body"><div class="library-card-heading"><div><span class="eyebrow">{item.mediaType}{item.folderName ? " · " + item.folderName : ""}</span><h3>{item.title}</h3></div><span class:list={["library-usage-count", item.usageCount > 0 && "used"]}>{item.usageCount ? "Used " + item.usageCount + "×" : "Unused"}</span></div>{item.description && <p>{item.description}</p>}{item.noteText && <blockquote>{item.noteText}</blockquote>}{item.sourceUrl && <a class="library-source-link" href={item.sourceUrl} target="_blank" rel="noopener">Open reference ↗</a>}<div class="library-tags">{item.tags.map((tag) => <span>{tag}</span>)}</div><small>{item.originalFilename ?? (item.itemKind === "note" ? "Private note" : "External reference")}{item.sizeBytes ? " · " + formatBytes(item.sizeBytes) : ""}{item.versionCount > 1 ? " · " + item.versionCount + " versions" : ""} · updated {new Date(item.updatedAt).toLocaleDateString("en-SG")}</small>{item.status === "deleted" && item.recoverableUntil && <small>Recover before {new Date(item.recoverableUntil).toLocaleString("en-SG")}</small>}</div>
+          <div class="library-card-actions">{item.status === "deleted" ? <button class="button button-small library-recover" data-id={item.id}>Recover</button> : <>{item.itemKind !== "note" && <a class="button button-small" href={"/create?type=" + createType(item) + "&libraryItem=" + item.id + "#create-product"}>Use in product</a>}{item.contentUrl && (isWmv(item) ? <a class="text-link" href={item.contentUrl} download={item.originalFilename ?? item.title}>Download original</a> : <a class="text-link" href={item.contentUrl} target="_blank">Preview</a>)}<button class="text-link library-lifecycle" data-id={item.id} data-status={item.status === "archived" ? "active" : "archived"}>{item.status === "archived" ? "Restore" : "Archive"}</button>{item.usageCount === 0 && <button class="text-link danger-link library-delete" data-id={item.id}>Delete</button>}</>}</div>
+        </article>)}</div> : <div class="library-empty dashboard-empty"><span class="library-empty-icon">▦</span><h3>{search || type !== "all" || folder ? "No content matches these filters" : status === "deleted" ? "Nothing is waiting for recovery" : status === "archived" ? "Nothing is archived" : "Build your private source library"}</h3><p>{status === "deleted" ? "Deleted content remains here for seven days." : status === "archived" ? "Archived files and references will appear here." : "Upload a source file, save a reference link or write a private note."}</p>{status === "active" && <button class="button button-small" type="button" data-open-upload disabled={!library.storage.canUpload}>Upload your first item</button>}</div>}
+      </article>
+    </main>
+  </section>
+  <dialog class="library-dialog" data-upload-dialog>
+    <form method="dialog" class="library-dialog-shell" data-direct-threshold={library.uploadPolicy.directUploadThresholdBytes} data-max-by-type={JSON.stringify(library.uploadPolicy.maxBytesByType)}>
+      <header><div><span class="eyebrow">Private source</span><h2>Upload content</h2><p>{uploadLimitsText} Large files upload in resumable parts.</p></div><button value="cancel" aria-label="Close">×</button></header>
+      <div class="stack-form">
+        <label>File<input name="file" type="file" required accept={library.uploadPolicy.acceptedExtensions.join(",")} /></label>
+        <p class="library-upload-note">WMV is accepted as an original source file for download and reuse. Convert it to MP4 or WebM when learners need in-page playback.</p>
+        <label>Title<input name="title" maxlength="160" placeholder="Defaults to filename" /></label>
+        <label>Description<textarea name="description" maxlength="2000" rows="3"></textarea></label>
+        <div class="form-columns"><label>Folder<select name="folderId"><option value="">No folder</option>{library.folders.map((entry) => <option value={entry.id}>{entry.name}</option>)}</select></label><label>Tags<input name="tags" placeholder="mathematics, reference" /></label></div>
+        <div class="library-upload-progress" data-upload-progress hidden><div><span data-upload-status>Preparing upload…</span><strong data-upload-percent>0%</strong></div><progress max="100" value="0"></progress><small>Keep this page open. If the connection drops, choose the same file again to resume within {library.uploadPolicy.resumeHours} hours.</small></div>
+        <div class="library-upload-actions"><button class="button" type="submit" disabled={!library.storage.canUpload}>{library.storage.canUpload ? "Upload privately" : "Storage full"}</button><button class="button button-secondary" type="button" data-cancel-upload hidden>Cancel upload</button></div>
+        <p class="form-message" aria-live="polite"></p>
+      </div>
+    </form>
+  </dialog>  <dialog class="library-dialog" data-reference-dialog><form method="dialog" class="library-dialog-shell"><header><div><span class="eyebrow">Reference or note</span><h2>Save a source</h2><p>Keep useful links and private working notes beside uploaded content.</p></div><button value="cancel" aria-label="Close">×</button></header><div class="stack-form"><label>Type<select name="itemKind"><option value="link">External link</option><option value="note">Private note</option></select></label><label>Title<input name="title" required maxlength="160" /></label><label data-source-url>Reference URL<input name="sourceUrl" type="url" placeholder="https://…" /></label><label data-note-text hidden>Note<textarea name="noteText" maxlength="20000" rows="6"></textarea></label><label>Description<textarea name="description" maxlength="2000" rows="3"></textarea></label><div class="form-columns"><label>Folder<select name="folderId"><option value="">No folder</option>{library.folders.map((entry) => <option value={entry.id}>{entry.name}</option>)}</select></label><label>Tags<input name="tags" placeholder="research, inspiration" /></label></div><button class="button" type="submit">Save privately</button><p class="form-message" aria-live="polite"></p></div></form></dialog>
+</BaseLayout>
+
+<script>
+  const uploadDialog = document.querySelector<HTMLDialogElement>("[data-upload-dialog]");
+  const referenceDialog = document.querySelector<HTMLDialogElement>("[data-reference-dialog]");
+  document.querySelectorAll("[data-open-upload]").forEach((button) => button.addEventListener("click", () => uploadDialog?.showModal()));
+  document.querySelectorAll("[data-open-reference]").forEach((button) => button.addEventListener("click", () => referenceDialog?.showModal()));
+  async function submitLibraryForm(form: HTMLFormElement, body: FormData | Record<string, unknown>) {
+    const message = form.querySelector<HTMLElement>(".form-message");
+    const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (button) button.disabled = true;
+    const options: RequestInit = body instanceof FormData
+      ? { method: "POST", body }
+      : { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) };
+    const response = await fetch("/api/creator/content-library", options);
+    const payload = await response.json().catch(() => ({})) as { error?: { message?: string } };
+    if (response.ok) { window.location.reload(); return; }
+    if (button) button.disabled = false;
+    if (message) { message.className = "form-error form-message"; message.textContent = payload.error?.message ?? "Content could not be saved."; }
+  }
+  document.querySelector<HTMLFormElement>("[data-storage-checkout]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+    const message = form.querySelector<HTMLElement>(".form-message");
+    if (button) button.disabled = true;
+    const blocks = Number(new FormData(form).get("blocks"));
+    const response = await fetch("/api/creator/storage/checkout", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ blocks }) });
+    const payload = await response.json().catch(() => ({})) as { checkoutUrl?: string; redirectUrl?: string; error?: { message?: string } };
+    if (response.ok && (payload.checkoutUrl || payload.redirectUrl)) { window.location.href = payload.checkoutUrl ?? payload.redirectUrl ?? "/content-library"; return; }
+    if (button) button.disabled = false;
+    if (message) { message.className = "form-error form-message"; message.textContent = payload.error?.message ?? "Storage checkout could not be started."; }
+  });
+  document.querySelector<HTMLButtonElement>("[data-storage-portal]")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    const response = await fetch("/api/creator/storage/portal", { method: "POST" });
+    const payload = await response.json().catch(() => ({})) as { portalUrl?: string; error?: { message?: string } };
+    if (response.ok && payload.portalUrl) { window.location.href = payload.portalUrl; return; }
+    button.disabled = false;
+    window.alert(payload.error?.message ?? "Billing management is temporarily unavailable.");
+  });
+  const uploadForm = uploadDialog?.querySelector<HTMLFormElement>("form");
+  const uploadProgress = uploadForm?.querySelector<HTMLElement>("[data-upload-progress]");
+  const uploadProgressBar = uploadProgress?.querySelector<HTMLProgressElement>("progress");
+  const uploadStatus = uploadProgress?.querySelector<HTMLElement>("[data-upload-status]");
+  const uploadPercent = uploadProgress?.querySelector<HTMLElement>("[data-upload-percent]");
+  const cancelUploadButton = uploadForm?.querySelector<HTMLButtonElement>("[data-cancel-upload]");
+  let activeUpload: { id: string; key: string; controller: AbortController; cancelling: boolean } | null = null;
+  const uploadError = async (response: Response, fallback: string) => {
+    const payload = await response.json().catch(() => ({})) as { error?: { message?: string } };
+    return payload.error?.message ?? fallback;
+  };
+  const showUploadProgress = (uploaded: number, total: number, label: string) => {
+    const percent = total ? Math.min(100, Math.round(uploaded / total * 100)) : 0;
+    if (uploadProgress) uploadProgress.hidden = false;
+    if (uploadProgressBar) uploadProgressBar.value = percent;
+    if (uploadStatus) uploadStatus.textContent = label;
+    if (uploadPercent) uploadPercent.textContent = percent + "%";
+  };
+  const resumableKey = (file: File) => "pencilscope-library-upload:" + [file.name, file.size, file.lastModified].join(":");
+  type ResumableUpload = { id: string; filename: string; totalBytes: number; partSizeBytes: number; status?: string; expiresAt: string; uploadedParts: { partNumber: number; sizeBytes: number }[] };
+  const uploadLargeFile = async (form: HTMLFormElement, file: File) => {
+    const key = resumableKey(file);
+    const metadata = new FormData(form);
+    let upload: ResumableUpload | null = null;
+    const savedId = window.localStorage.getItem(key);
+    if (savedId) {
+      const statusResponse = await fetch("/api/creator/content-library/uploads/" + encodeURIComponent(savedId));
+      if (statusResponse.ok) {
+        const statusPayload = await statusResponse.json() as { upload: ResumableUpload };
+        if (statusPayload.upload?.filename === file.name && statusPayload.upload.totalBytes === file.size && statusPayload.upload.status !== "completed") upload = statusPayload.upload;
+      } else {
+        window.localStorage.removeItem(key);
+      }
+    }
+    if (!upload) {
+      showUploadProgress(0, file.size, "Reserving storage…");
+      const startResponse = await fetch("/api/creator/content-library/uploads", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename: file.name, mimeType: file.type, sizeBytes: file.size, title: metadata.get("title"), description: metadata.get("description"), folderId: metadata.get("folderId"), tags: metadata.get("tags") })
+      });
+      if (!startResponse.ok) throw new Error(await uploadError(startResponse, "The resumable upload could not be started."));
+      upload = ((await startResponse.json()) as { upload: ResumableUpload }).upload;
+      window.localStorage.setItem(key, upload.id);
+    }
+    const controller = new AbortController();
+    activeUpload = { id: upload.id, key, controller, cancelling: false };
+    if (cancelUploadButton) cancelUploadButton.hidden = false;
+    const completed = new Set(upload.uploadedParts.map((part) => part.partNumber));
+    let uploadedBytes = upload.uploadedParts.reduce((sum, part) => sum + part.sizeBytes, 0);
+    showUploadProgress(uploadedBytes, file.size, uploadedBytes ? "Resuming upload…" : "Uploading securely…");
+    const partCount = Math.ceil(file.size / upload.partSizeBytes);
+    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+      if (completed.has(partNumber)) continue;
+      const start = (partNumber - 1) * upload.partSizeBytes;
+      const chunk = file.slice(start, Math.min(file.size, start + upload.partSizeBytes));
+      let response: Response | null = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        response = await fetch("/api/creator/content-library/uploads/" + encodeURIComponent(upload.id) + "/parts/" + partNumber, {
+          method: "PUT", headers: { "content-type": "application/octet-stream", "x-pencilscope-part-size": String(chunk.size) },
+          body: chunk, signal: controller.signal
+        });
+        if (response.ok) break;
+        if (attempt === 3) throw new Error(await uploadError(response, "Upload part " + partNumber + " failed."));
+        showUploadProgress(uploadedBytes, file.size, "Retrying part " + partNumber + "…");
+      }
+      uploadedBytes += chunk.size;
+      showUploadProgress(uploadedBytes, file.size, "Uploaded part " + partNumber + " of " + partCount);
+    }
+    showUploadProgress(file.size, file.size, "Finalising your file…");
+    const completeResponse = await fetch("/api/creator/content-library/uploads/" + encodeURIComponent(upload.id) + "/complete", { method: "POST", signal: controller.signal });
+    if (!completeResponse.ok) throw new Error(await uploadError(completeResponse, "The uploaded file could not be finalised."));
+    window.localStorage.removeItem(key);
+    window.location.reload();
+  };
+  uploadForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const file = (uploadForm.elements.namedItem("file") as HTMLInputElement | null)?.files?.[0];
+    const message = uploadForm.querySelector<HTMLElement>(".form-message");
+    if (!file) { if (message) { message.className = "form-error form-message"; message.textContent = "Choose a file to upload."; } return; }
+    const extension = file.name.toLowerCase().split(".").pop() ?? "";
+    const typeByExtension: Record<string, "image" | "document" | "audio" | "video"> = {
+      jpg: "image", jpeg: "image", png: "image", webp: "image", gif: "image",
+      pdf: "document", txt: "document", md: "document", markdown: "document",
+      mp3: "audio", m4a: "audio", ogg: "audio", oga: "audio", wav: "audio",
+      mp4: "video", m4v: "video", webm: "video", wmv: "video"
+    };
+    const mediaType = typeByExtension[extension];
+    const maxByType = JSON.parse(uploadForm.dataset.maxByType ?? "{}") as Record<string, number>;
+    if (!mediaType) { if (message) { message.className = "form-error form-message"; message.textContent = "This file type is not supported."; } return; }
+    if (file.size > Number(maxByType[mediaType] ?? 0)) { if (message) { message.className = "form-error form-message"; message.textContent = "This " + mediaType + " file exceeds the configured upload limit."; } return; }
+    const threshold = Number(uploadForm.dataset.directThreshold ?? 50_000_000);
+    if (file.size <= threshold) { void submitLibraryForm(uploadForm, new FormData(uploadForm)); return; }
+    const submit = uploadForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (submit) submit.disabled = true;
+    if (message) { message.className = "form-message"; message.textContent = ""; }
+    void uploadLargeFile(uploadForm, file).catch((error: unknown) => {
+      if (activeUpload?.cancelling || (error instanceof DOMException && error.name === "AbortError")) return;
+      if (submit) submit.disabled = false;
+      if (cancelUploadButton) cancelUploadButton.hidden = true;
+      if (message) { message.className = "form-error form-message"; message.textContent = error instanceof Error ? error.message : "The upload could not be completed."; }
+      activeUpload = null;
+    });
+  });
+  cancelUploadButton?.addEventListener("click", async () => {
+    if (!activeUpload) return;
+    const current = activeUpload;
+    current.cancelling = true;
+    current.controller.abort();
+    cancelUploadButton.disabled = true;
+    await fetch("/api/creator/content-library/uploads/" + encodeURIComponent(current.id), { method: "DELETE" }).catch(() => null);
+    window.localStorage.removeItem(current.key);
+    activeUpload = null;
+    if (uploadProgress) uploadProgress.hidden = true;
+    cancelUploadButton.hidden = true;
+    cancelUploadButton.disabled = false;
+    const submit = uploadForm?.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (submit) submit.disabled = false;
+    const message = uploadForm?.querySelector<HTMLElement>(".form-message");
+    if (message) { message.className = "form-message"; message.textContent = "Upload cancelled. No storage was used."; }
+  });
+  const referenceForm = referenceDialog?.querySelector<HTMLFormElement>("form");
+  const referenceKind = referenceForm?.elements.namedItem("itemKind") as HTMLSelectElement | null;
+  const syncReferenceFields = () => {
+    const note = referenceKind?.value === "note";
+    const source = referenceForm?.querySelector<HTMLElement>("[data-source-url]");
+    const noteField = referenceForm?.querySelector<HTMLElement>("[data-note-text]");
+    if (source) source.hidden = note;
+    if (noteField) noteField.hidden = !note;
+  };
+  referenceKind?.addEventListener("change", syncReferenceFields); syncReferenceFields();
+  referenceForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void submitLibraryForm(referenceForm, Object.fromEntries(new FormData(referenceForm).entries()));
+  });
+  document.querySelector<HTMLFormElement>("[data-folder-form]")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget as HTMLFormElement;
+    const response = await fetch("/api/creator/content-library/folders", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: new FormData(form).get("name") }) });
+    if (response.ok) window.location.reload();
+    else {
+      const payload = await response.json().catch(() => ({})) as { error?: { message?: string } };
+      const message = form.querySelector<HTMLElement>(".form-message");
+      if (message) { message.className = "form-error form-message"; message.textContent = payload.error?.message ?? "Folder could not be created."; }
+    }
+  });
+  document.querySelectorAll<HTMLButtonElement>(".library-lifecycle").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    const response = await fetch("/api/creator/content-library/items/" + encodeURIComponent(button.dataset.id ?? ""), { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ status: button.dataset.status }) });
+    if (response.ok) window.location.reload(); else { button.disabled = false; button.textContent = "Try again"; }
+  }));
+  document.querySelectorAll<HTMLButtonElement>(".library-delete").forEach((button) => button.addEventListener("click", async () => {
+    if (!window.confirm("Delete this unused content? You can recover it for seven days.")) return;
+    button.disabled = true;
+    const response = await fetch("/api/creator/content-library/items/" + encodeURIComponent(button.dataset.id ?? ""), { method: "DELETE" });
+    if (response.ok) window.location.reload(); else { button.disabled = false; button.textContent = "Could not delete"; }
+  }));
+  document.querySelectorAll<HTMLButtonElement>(".library-recover").forEach((button) => button.addEventListener("click", async () => {
+    button.disabled = true;
+    const response = await fetch("/api/creator/content-library/items/" + encodeURIComponent(button.dataset.id ?? "") + "/restore", { method: "POST" });
+    if (response.ok) window.location.href = "/content-library";
+    else { button.disabled = false; button.textContent = response.status === 410 ? "Recovery expired" : "Could not recover"; }
+  }));
+</script>

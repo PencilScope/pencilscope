@@ -1,0 +1,91 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+import { formatPrice } from "@/lib/courses";
+
+const token = Astro.params.token ?? "";
+const userId = await Astro.session?.get("userId");
+const response = await requestApi(`/api/invitations/${encodeURIComponent(token)}`, {
+  userId: typeof userId === "string" ? userId : undefined
+});
+type Invitation = {
+  id: string; courseId: string; offeringId: string; recipientEmail: string;
+  personalMessage: string; status: string; expiresAt: string; courseTitle: string;
+  courseSlug: string; offeringTitle: string; priceCents: number; currency: string;
+  startsAt: string | null; inviterName: string; emailMatches: boolean;
+  viewer: null | { id: string; email: string; displayName: string; accountType: string };
+};
+let invitation: Invitation | null = null;
+let errorMessage = "";
+if (response.ok) {
+  invitation = (await response.json<{ invitation: Invitation }>()).invitation;
+} else {
+  const result: { error?: { message?: string } } =
+    await response.json<{ error?: { message?: string } }>().catch(() => ({}));
+  errorMessage = result.error?.message ?? "This invitation is unavailable.";
+  Astro.response.status = response.status;
+}
+
+const next = `/invite/${encodeURIComponent(token)}`;
+const registrationUrl = invitation
+  ? `/register?next=${encodeURIComponent(next)}&email=${encodeURIComponent(invitation.recipientEmail)}`
+  : "/register";
+const signInUrl = `/sign-in?next=${encodeURIComponent(next)}`;
+const checkoutSuccess = Astro.url.searchParams.get("checkout") === "success";
+---
+
+<BaseLayout
+  title={invitation ? `Invitation to ${invitation.courseTitle} — PencilScope` : "Course invitation — PencilScope"}
+  description={invitation ? `${invitation.inviterName} invited you to register for ${invitation.courseTitle}.` : errorMessage}
+>
+  <section class="invitation-shell shell">
+    {invitation ? (
+      <article class="invitation-card">
+        <span class="eyebrow">Private course invitation</span>
+        <h1>You're invited to learn.</h1>
+        <p><strong>{invitation.inviterName}</strong> invited you to register for:</p>
+        <div class="invitation-course">
+          <span>{invitation.offeringTitle}</span>
+          <h2>{invitation.courseTitle}</h2>
+          <strong>{formatPrice(invitation.priceCents, invitation.currency)}</strong>
+          {invitation.startsAt && <small>Starts {new Date(invitation.startsAt).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" })}</small>}
+        </div>
+        {invitation.personalMessage && <blockquote>{invitation.personalMessage}</blockquote>}
+        {checkoutSuccess && <p class="form-success">Payment received. Access will appear on your dashboard as soon as Stripe confirms it.</p>}
+        {invitation.status === "converted" ? (
+          <a class="button button-full" href="/dashboard">Open your dashboard</a>
+        ) : !invitation.viewer ? (
+          <div class="invitation-actions">
+            <a class="button button-full" href={registrationUrl}>Create account to continue</a>
+            <a class="text-link" href={signInUrl}>Already registered? Sign in</a>
+          </div>
+        ) : !invitation.emailMatches ? (
+          <div>
+            <p class="form-error">This invitation was sent to {invitation.recipientEmail}. You are signed in as {invitation.viewer.email}.</p>
+            <form action="/api/auth/logout" method="post"><button class="button button-full" type="submit">Sign out and use the invited account</button></form>
+          </div>
+        ) : (
+          <form class="stack-form checkout-form" action="/api/checkout" method="post">
+            <input type="hidden" name="courseId" value={invitation.courseId} />
+            <input type="hidden" name="offeringId" value={invitation.offeringId} />
+            <input type="hidden" name="invitationToken" value={token} />
+            <input type="hidden" name="returnTo" value={next} />
+            <input type="hidden" name="studentId" value={invitation.viewer.id} />
+            <button class="button button-full" type="submit">Continue to secure checkout</button>
+          </form>
+        )}
+        <div class="invitation-footer">
+          <a class="text-link" href={`/courses/${invitation.courseSlug}`}>View public course page</a>
+          <small>Invitation expires {new Date(invitation.expiresAt).toLocaleDateString("en-SG", { dateStyle: "medium" })}</small>
+        </div>
+      </article>
+    ) : (
+      <article class="invitation-card invitation-error">
+        <span class="eyebrow">Course invitation</span>
+        <h1>Invitation unavailable.</h1>
+        <p>{errorMessage}</p>
+        <a class="button" href="/courses">Explore courses</a>
+      </article>
+    )}
+  </section>
+</BaseLayout>

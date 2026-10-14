@@ -1,6 +1,7 @@
 ---
 import BaseLayout from "@/layouts/BaseLayout.astro";
 import { requestApi } from "@/lib/api-client";
+import { learningProductMeta, type LearningProductType } from "@/lib/learning-products";
 
 const userId = await Astro.session?.get("userId");
 if (typeof userId !== "string") return Astro.redirect("/sign-in");
@@ -16,7 +17,7 @@ const data = await response.json<{
   modules: Array<{ id: string; title: string; position: number }>;
   lessons: Array<{
     id: string; module_id: string; title: string; lesson_type: string; delivery_mode: string;
-    content_json: string; estimated_minutes: number | null;
+    content_json: string; estimated_minutes: number | null; library_media_url: string | null;
     progress_status: string; progress_percent: number;
   }>;
   assessments: Array<{
@@ -24,7 +25,11 @@ const data = await response.json<{
     time_limit_seconds: number | null; attempt_limit: number | null;
   }>;
   flashcardDecks: Array<{ id: string; lesson_id: string | null; title: string; description: string }>;
-  materials: Array<{ id: string; title: string; description: string; material_type: string }>;
+  materials: Array<{ id: string; title: string; description: string; material_type: string; resource_kind: string }>;
+  learningProducts: Array<{
+    id: string; slug: string; title: string; description: string; product_type: LearningProductType;
+    estimated_minutes: number | null; creator_name: string;
+  }>;
   sessions: Array<{
     id: string; title: string; delivery_mode: string; starts_at: string; ends_at: string;
     timezone: string; meeting_url: string | null; meeting_provider: string | null;
@@ -33,22 +38,46 @@ const data = await response.json<{
   }>;
 }>();
 const studentQuery = studentId ? `?studentId=${encodeURIComponent(studentId)}` : "";
+const completedLessons = data.lessons.filter((lesson) => lesson.progress_status === "completed").length;
+const courseProgress = data.lessons.length
+  ? Math.round(data.lessons.reduce((total, lesson) => total + Number(lesson.progress_percent || 0), 0) / data.lessons.length)
+  : 0;
+const upcomingSessions = data.sessions
+  .filter((session) => new Date(session.ends_at).getTime() >= Date.now())
+  .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
+const nextSession = upcomingSessions[0] ?? null;
+const nextLesson = data.lessons.find((lesson) => lesson.progress_status !== "completed") ?? data.lessons[0] ?? null;
 ---
 <BaseLayout title={`${data.course.title} — Learning`}>
   <section class="dashboard-hero learning-hero"><div class="shell"><a class="back-link" href="/dashboard">← Dashboard</a><span class="eyebrow">{data.course.subject} · {data.course.primary_level}</span><h1>{data.course.title}</h1><p>{data.course.description}</p><div class="feature-pills">{data.offerings.map((offering) => <small>{offering.title}</small>)}</div></div></section>
   <section class="shell learning-layout">
     <main>
+      <section class="panel learner-course-overview">
+        <span class="eyebrow">Course overview</span>
+        <h2>Your learning at a glance</h2>
+        <div class="studio-metric-grid">
+          <section><strong>{courseProgress}%</strong><span>Overall progress</span><small>{completedLessons} of {data.lessons.length} lessons complete</small></section>
+          <section><strong>{data.modules.length}</strong><span>Modules</span><small>{data.lessons.length} guided lessons</small></section>
+          <section><strong>{data.assessments.length}</strong><span>Assessments</span><small>Quizzes, tests and mock exams</small></section>
+          <section><strong>{data.sessions.length}</strong><span>Live sessions</span><small>{data.materials.length + data.learningProducts.length} included resources</small></section>
+        </div>
+      </section>
+      {(nextSession || nextLesson) && <section class:list={["panel", "learner-next-action", nextSession?.delivery_mode === "live_online" ? "online" : nextSession ? "in-person" : "self-paced"]}>
+        <div><span class="eyebrow">{nextSession ? "Next scheduled class" : "Continue learning"}</span><h2>{nextSession?.title ?? nextLesson?.title}</h2>{nextSession ? <p>{new Date(nextSession.starts_at).toLocaleString("en-SG", { dateStyle: "full", timeStyle: "short" })} · {nextSession.timezone}</p> : <p>Resume the next activity in your learning path.</p>}</div>
+        <div class="learner-next-actions">{nextSession?.delivery_mode === "live_online" && nextSession.meeting_url && <a class="button" href={nextSession.meeting_url} target="_blank" rel="noreferrer">Join online class</a>}{nextSession?.delivery_mode !== "live_online" && nextSession && <a class="button" href="#sessions">View venue details</a>}{nextSession && <button class="button button-secondary" type="button" data-calendar-download data-title={`${data.course.title}: ${nextSession.title}`} data-start={nextSession.starts_at} data-end={nextSession.ends_at} data-description={data.course.description} data-location={nextSession.meeting_url ?? [nextSession.venue_name, nextSession.address_line_1, nextSession.postal_code].filter(Boolean).join(", ")}>Add to calendar</button>}{!nextSession && nextLesson && <a class="button" href={`#lesson-${nextLesson.id}`}>{nextLesson.progress_status === "completed" ? "Review lesson" : "Continue lesson"}</a>}</div>
+      </section>}
       {data.modules.map((module) => (
-        <section class="learning-module">
+        <section class="learning-module" id={`module-${module.id}`}>
           <div class="module-heading"><span>{String(module.position).padStart(2, "0")}</span><h2>{module.title}</h2></div>
           <div class="lesson-list">
             {data.lessons.filter((lesson) => lesson.module_id === module.id).map((lesson) => {
               const content = JSON.parse(lesson.content_json || "{}");
               const assessment = data.assessments.find((item) => item.lesson_id === lesson.id);
               const deck = data.flashcardDecks.find((item) => item.lesson_id === lesson.id);
-              return <article class:list={["lesson-row", { complete: lesson.progress_status === "completed" }]}>
+              const lessonMediaUrl = content.videoUrl ?? lesson.library_media_url;
+              return <article id={`lesson-${lesson.id}`} class:list={["lesson-row", { complete: lesson.progress_status === "completed" }]}>
                 <div class="lesson-kind">{lesson.delivery_mode.replace("_", " ")}</div>
-                <div><h3>{lesson.title}</h3><p>{content.summary ?? "Creator-guided learning activity."}</p><small>{lesson.estimated_minutes ? `${lesson.estimated_minutes} min` : "Self-paced"} · {lesson.progress_status}</small></div>
+                <div><h3>{lesson.title}</h3><p>{content.summary ?? "Creator-guided learning activity."}</p>{lesson.lesson_type === "video" && lessonMediaUrl && <video class="course-video-player" controls preload="metadata" src={lessonMediaUrl} data-video-key={`${courseId}:${lesson.id}`}><track kind="captions" /></video>}<small>{lesson.estimated_minutes ? `${lesson.estimated_minutes} min` : "Self-paced"} · {lesson.progress_status}</small></div>
                 <div class="lesson-actions">
                   {assessment && <a class="button button-small" href={`/assessment/${assessment.id}${studentQuery}`}>Start {assessment.assessment_type.replace("_", " ")}</a>}
                   {deck && <a class="button button-small" href={`/flashcards/${deck.id}${studentQuery}`}>Study cards</a>}
@@ -61,8 +90,43 @@ const studentQuery = studentId ? `?studentId=${encodeURIComponent(studentId)}` :
         </section>
       ))}
       {data.flashcardDecks.filter((deck) => !deck.lesson_id).map((deck) => <a class="panel activity-link" href={`/flashcards/${deck.id}${studentQuery}`}><span class="eyebrow">Flashcards</span><h3>{deck.title}</h3><p>{deck.description}</p></a>)}
-      {data.sessions.length > 0 && <section class="learning-module"><div class="module-heading"><span>◷</span><h2>Scheduled sessions</h2></div><div class="material-grid">{data.sessions.map((session) => <article class="panel material-card"><span>{session.delivery_mode.replace("_", " ")}</span><h3>{session.title}</h3><p>{new Date(session.starts_at).toLocaleString("en-SG", { dateStyle: "full", timeStyle: "short" })}</p>{session.delivery_mode === "live_online" && session.meeting_url ? <a class="button button-small" href={session.meeting_url} target="_blank" rel="noreferrer">Join online session</a> : <p><strong>{session.venue_name}</strong><br />{session.address_line_1}{session.postal_code ? ` · ${session.postal_code}` : ""}<br />{session.arrival_instructions}</p>}</article>)}</div></section>}
-      {data.materials.length > 0 && <section class="learning-module"><div class="module-heading"><span>+</span><h2>Course materials</h2></div><div class="material-grid">{data.materials.map((material) => <a class="panel material-card" href={`/api/materials/${material.id}${studentQuery}`} target="_blank"><span>{material.material_type}</span><h3>{material.title}</h3><p>{material.description}</p></a>)}</div></section>}
+      {data.sessions.length > 0 && <section class="learning-module" id="sessions"><div class="module-heading"><span>◷</span><h2>Scheduled sessions</h2></div><div class="material-grid">{data.sessions.map((session) => { const venue = [session.venue_name, session.address_line_1, session.address_line_2, session.city, session.postal_code].filter(Boolean).join(", "); return <article class="panel material-card session-card"><span>{session.delivery_mode === "live_online" ? "Online class" : "In-person class"}</span><h3>{session.title}</h3><p>{new Date(session.starts_at).toLocaleString("en-SG", { dateStyle: "full", timeStyle: "short" })}</p>{session.delivery_mode === "live_online" && session.meeting_url ? <a class="button button-small" href={session.meeting_url} target="_blank" rel="noreferrer">Join online class</a> : <div class="venue-details"><p><strong>{session.venue_name}</strong><br />{session.address_line_1}{session.postal_code ? ` · ${session.postal_code}` : ""}<br />{session.arrival_instructions}</p>{venue && <button class="text-link" type="button" data-copy-venue={venue}>Copy venue address</button>}</div>}</article>; })}</div></section>}
+      {data.materials.length > 0 && <section class="learning-module"><div class="module-heading"><span>+</span><h2>Course materials</h2></div><div class="material-grid">{data.materials.map((material) => <a class="panel material-card" href={`/api/materials/${material.id}${studentQuery}`} target="_blank"><span>{material.resource_kind} · {material.material_type}</span><h3>{material.title}</h3><p>{material.description}</p></a>)}</div></section>}
+      {data.learningProducts.length > 0 && <section class="learning-module"><div class="module-heading"><span>◇</span><h2>Included learning products</h2></div><div class="material-grid">{data.learningProducts.map((product) => { const meta = learningProductMeta[product.product_type]; return <a class="panel material-card included-learning-product" href={`/library/${product.slug}`}><span>{meta.symbol} · {meta.label}</span><h3>{product.title}</h3><p>{product.description}</p><small>{product.estimated_minutes ? `${product.estimated_minutes} min · ` : ""}Included with this course</small></a>; })}</div></section>}
     </main>
   </section>
 </BaseLayout>
+
+<script>
+  document.querySelectorAll<HTMLVideoElement>("video[data-video-key]").forEach((video) => {
+    const storageKey = `pencilscope-video:${video.dataset.videoKey ?? ""}`;
+    video.addEventListener("loadedmetadata", () => {
+      const saved = Number(localStorage.getItem(storageKey) ?? 0);
+      if (saved > 0 && saved < video.duration - 5) video.currentTime = saved;
+    }, { once: true });
+    video.addEventListener("timeupdate", () => {
+      if (Math.floor(video.currentTime) % 5 === 0) localStorage.setItem(storageKey, String(video.currentTime));
+    });
+    video.addEventListener("ended", () => localStorage.removeItem(storageKey));
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-calendar-download]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const date = (value: string) => new Date(value).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+      const escape = (value: string) => value.replaceAll("\\", "\\\\").replaceAll("\n", "\\n").replaceAll(",", "\\,").replaceAll(";", "\\;");
+      const calendar = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//PencilScope//Learning Session//EN", "BEGIN:VEVENT", `UID:${crypto.randomUUID()}@pencilscope.com`, `DTSTAMP:${date(new Date().toISOString())}`, `DTSTART:${date(button.dataset.start ?? "")}`, `DTEND:${date(button.dataset.end ?? "")}`, `SUMMARY:${escape(button.dataset.title ?? "Learning session")}`, `DESCRIPTION:${escape(button.dataset.description ?? "")}`, `LOCATION:${escape(button.dataset.location ?? "")}`, "END:VEVENT", "END:VCALENDAR"].join("\r\n");
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([calendar], { type: "text/calendar;charset=utf-8" }));
+      link.download = "pencilscope-session.ics";
+      link.click();
+      URL.revokeObjectURL(link.href);
+    });
+  });
+
+  document.querySelectorAll<HTMLButtonElement>("[data-copy-venue]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(button.dataset.copyVenue ?? "");
+      button.textContent = "Address copied";
+    });
+  });
+</script>

@@ -1,0 +1,206 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/payments");
+if (["return", "refresh"].includes(Astro.url.searchParams.get("payout") ?? "")) {
+  await requestApi("/api/creator/payout-account", { userId });
+}
+const response = await requestApi("/api/payments", { userId });
+if (!response.ok) return Astro.redirect("/dashboard");
+
+type Payment = {
+  id: string;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  course_title: string;
+  offering_title: string | null;
+  learner_name?: string;
+  learner_email?: string;
+  issue_status?: string | null;
+  gross_cents?: number | null;
+  processing_fee_cents?: number | null;
+  platform_fee_cents?: number | null;
+  meeting_usage_fee_cents?: number | null;
+  refund_cents?: number | null;
+  reserve_cents?: number | null;
+  payable_cents?: number | null;
+  settlement_status?: string | null;
+  completion_at?: string | null;
+  review_ends_at?: string | null;
+  transferred_at?: string | null;
+  stripe_checkout_session_id?: string | null;
+  stripe_payment_intent_id?: string | null;
+};
+type PaymentEvent = {
+  id: string; order_id: string; event_type: string; status: string;
+  title: string; detail: string; metadata_json: string; occurred_at: string;
+};
+type PayoutBatch = {
+  id: string; currency: string; gross_cents: number; deduction_cents: number;
+  amount_cents: number; earning_count: number; status: string;
+  period_starts_at: string; period_ends_at: string; scheduled_for: string;
+  provider_transfer_id: string | null; failure_message: string | null; paid_at: string | null;
+};
+type CreatorSummary = {
+  currency: string;
+  gross_cents: number;
+  deduction_cents: number;
+  available_cents: number;
+  transferred_cents: number;
+  pending_cents: number;
+};
+type PayoutAccount = {
+  connected: boolean;
+  detailsSubmitted: boolean;
+  chargesEnabled: boolean;
+  payoutsEnabled: boolean;
+  status: "not_configured" | "pending" | "ready" | "restricted";
+  updatedAt: string | null;
+};
+const data = await response.json<{
+  purchases: Payment[];
+  creatorSales: Payment[];
+  creatorSummary: CreatorSummary[];
+  paymentEvents: PaymentEvent[];
+  payoutBatches: PayoutBatch[];
+  payoutAccount: PayoutAccount;
+}>();
+const eventsFor = (orderId: string) => data.paymentEvents.filter((event) => event.order_id === orderId);
+const money = (amount: number | null | undefined, currency: string) => new Intl.NumberFormat("en-SG", {
+  style: "currency",
+  currency
+}).format(Number(amount ?? 0) / 100);
+const statusLabel = (value: string | null | undefined) => ({
+  pending_course: "Course in progress",
+  pending_usage: "Finalising class usage",
+  review_period: "Learner review period",
+  held: "On hold",
+  eligible: "Ready for payout",
+  payout_setup_required: "Payout setup required",
+  transferring: "Sending payout",
+  transferred: "Paid to creator",
+  paid: "Paid to creator",
+  zero_balance: "Settled",
+  reversal_required: "Review required",
+  reversed: "Reversed"
+}[value ?? ""] ?? (value ?? "Not available").replaceAll("_", " "));
+---
+<BaseLayout title="Payment history — PencilScope">
+  <section class="dashboard-hero">
+    <div class="shell">
+      <a class="back-link" href="/dashboard">← Dashboard</a>
+      <span class="eyebrow">Payments</span>
+      <h1>Payment history</h1>
+      <p>Track purchases, course earnings, deductions and when creator payouts become available.</p>
+    </div>
+  </section>
+  <section class="shell operations-layout">
+    <article class="panel payout-setup-card">
+      <span class="eyebrow">Creator payouts</span>
+      <h2>{data.payoutAccount.status === "ready" ? "Your payout account is ready" : "Set up how you get paid"}</h2>
+      {data.payoutAccount.status === "ready"
+        ? <p>Identity and bank details are managed securely by Stripe. Eligible earnings can now be transferred to your connected account.</p>
+        : data.payoutAccount.status === "restricted"
+          ? <p>Stripe needs more information before payouts can be enabled. Continue setup to resolve the outstanding requirements.</p>
+          : <p>Connect a bank account and complete Stripe’s identity checks. PencilScope never stores your bank details.</p>}
+      <div class="payout-actions">
+        {data.payoutAccount.status === "ready" ? <>
+          <button class="button button-small" type="button" data-payout-action="release">Send eligible payout</button>
+          <button class="button button-small button-secondary" type="button" data-payout-action="dashboard">Manage payout account</button>
+        </> : <button class="button button-small" type="button" data-payout-action="onboard">{data.payoutAccount.connected ? "Continue payout setup" : "Set up payouts"}</button>}
+      </div>
+      <p class="form-message" data-payout-message aria-live="polite"></p>
+      <small>Earnings become eligible after delivery is complete, class usage is finalised, and the seven-day learner review period ends without an open issue. Eligible amounts are tracked in payout batches.</small>
+    </article>
+    <article class="panel">
+      <span class="eyebrow">Your purchases</span>
+      <h2>Learning payments</h2>
+      {data.purchases.length ? <div class="payment-card-list">{data.purchases.map((payment) => <article class="payment-tracking-card">
+        <div class="payment-tracking-summary"><div><strong>{payment.course_title}</strong><small>{payment.offering_title} · {new Date(payment.created_at).toLocaleString("en-SG")}</small></div><span class={`settlement-status ${payment.issue_status ? "held" : payment.status}`}>{payment.issue_status ? "Issue under review" : payment.status}</span><strong>{money(payment.amount_cents, payment.currency)}</strong></div>
+        <details class="payment-timeline"><summary>View payment progress and references</summary>
+          <div class="payment-reference-grid"><span><small>Order</small><code>{payment.id}</code></span>{payment.stripe_payment_intent_id && <span><small>Payment reference</small><code>{payment.stripe_payment_intent_id}</code></span>}</div>
+          <ol>{eventsFor(payment.id).map((event) => <li><span aria-hidden="true"></span><div><strong>{event.title}</strong><small>{event.detail}</small><time>{new Date(event.occurred_at).toLocaleString("en-SG")}</time></div></li>)}</ol>
+        </details>
+        <div class="payment-help">{payment.status === "paid" && !payment.issue_status ? <details class="payment-issue"><summary>Report a payment or course issue</summary><form class="payment-issue-form" data-order-id={payment.id}><label>What went wrong?<textarea name="reason" minlength="10" maxlength="2000" rows="3" required placeholder="Describe the course or payment issue"></textarea></label><label>Request type<select name="caseType"><option value="service_issue">Course service issue</option><option value="refund_request">Request a refund review</option></select></label><button class="button button-secondary" type="submit">Send for review</button><p class="form-message" aria-live="polite"></p></form></details> : payment.issue_status ? <small>We will review this before releasing the creator payout.</small> : null}</div>
+      </article>)}</div> : <p class="form-message">No course payments yet.</p>}
+    </article>
+
+    {data.creatorSales.length > 0 && <article class="panel">
+      <span class="eyebrow">Creator earnings</span>
+      <h2>Revenue and payout status</h2>
+      <p class="settlement-intro">Earnings are released after the final scheduled class, meeting usage is finalised, and the learner review period ends without an open issue. Automatic transfers remain off until the connected payout account is enabled.</p>
+      <div class="settlement-summary">{data.creatorSummary.map((summary) => <>
+        <section><small>Gross sales · {summary.currency}</small><strong>{money(summary.gross_cents, summary.currency)}</strong></section>
+        <section><small>Costs and adjustments</small><strong>{money(summary.deduction_cents, summary.currency)}</strong></section>
+        <section><small>Pending release</small><strong>{money(summary.pending_cents, summary.currency)}</strong></section>
+        <section><small>Paid out</small><strong>{money(summary.transferred_cents, summary.currency)}</strong></section>
+      </>)}</div>
+      <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Learner</th><th>Course</th><th>Release status</th><th>Deductions</th><th>Net earning</th></tr></thead><tbody>{data.creatorSales.map((payment) => <tr><td><strong>{payment.learner_name}</strong><small>{payment.learner_email}</small></td><td><strong>{payment.course_title}</strong><small>{payment.offering_title}</small></td><td><span class={`settlement-status ${payment.settlement_status ?? "pending_course"}`}>{statusLabel(payment.settlement_status)}</span>{payment.review_ends_at && <small>Review ends {new Date(payment.review_ends_at).toLocaleString("en-SG")}</small>}{payment.transferred_at && <small>Paid {new Date(payment.transferred_at).toLocaleString("en-SG")}</small>}</td><td><div class="settlement-breakdown"><span>Processing {money(payment.processing_fee_cents, payment.currency)}</span><span>Platform {money(payment.platform_fee_cents, payment.currency)}</span><span>Online class usage {money(payment.meeting_usage_fee_cents, payment.currency)}</span>{Number(payment.refund_cents ?? 0) > 0 && <span>Refunds {money(payment.refund_cents, payment.currency)}</span>}</div></td><td><strong>{money(payment.payable_cents ?? payment.amount_cents, payment.currency)}</strong><small>from {money(payment.gross_cents ?? payment.amount_cents, payment.currency)} gross</small></td></tr>)}</tbody></table></div>
+    </article>}
+    {data.payoutBatches.length > 0 && <article class="panel">
+      <span class="eyebrow">Payout tracking</span>
+      <h2>Payout batches</h2>
+      <p class="settlement-intro">Each batch links the included earnings to the provider transfer so amounts can be reconciled end to end.</p>
+      <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Scheduled</th><th>Earnings</th><th>Calculation</th><th>Status</th><th>Reference</th></tr></thead><tbody>{data.payoutBatches.map((batch) => <tr><td>{new Date(batch.scheduled_for).toLocaleString("en-SG")}</td><td>{batch.earning_count} sale{batch.earning_count === 1 ? "" : "s"}</td><td><strong>{money(batch.amount_cents, batch.currency)}</strong><small>{money(batch.gross_cents, batch.currency)} gross − {money(batch.deduction_cents, batch.currency)} deductions</small></td><td><span class={`settlement-status ${batch.status}`}>{batch.status}</span>{batch.failure_message && <small>{batch.failure_message}</small>}</td><td><code>{batch.provider_transfer_id ?? batch.id}</code></td></tr>)}</tbody></table></div>
+    </article>}
+  </section>
+</BaseLayout>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>("[data-payout-action]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const action = button.dataset.payoutAction ?? "onboard";
+      const message = document.querySelector<HTMLElement>("[data-payout-message]");
+      button.disabled = true;
+      if (message) { message.className = "form-message"; message.textContent = action === "release" ? "Checking eligible earnings…" : "Opening secure payout setup…"; }
+      try {
+        const path = action === "release" ? "/api/creator/payouts/release" : `/api/creator/payout-account/${action}`;
+        const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+        const payload = await response.json() as { url?: string; error?: { message?: string } };
+        if (!response.ok) throw new Error(payload.error?.message ?? "The payout request could not be completed.");
+        if (payload.url) { location.href = payload.url; return; }
+        if (message) { message.className = "form-success"; message.textContent = "Eligible earnings were sent for payout."; }
+        window.setTimeout(() => location.reload(), 900);
+      } catch (error) {
+        if (message) { message.className = "form-error"; message.textContent = error instanceof Error ? error.message : "The payout request could not be completed."; }
+        button.disabled = false;
+      }
+    });
+  });
+  document.querySelectorAll<HTMLFormElement>(".payment-issue-form").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const submit = form.querySelector<HTMLButtonElement>("button[type='submit']");
+      const message = form.querySelector<HTMLElement>(".form-message");
+      const data = new FormData(form);
+      if (submit) submit.disabled = true;
+      if (message) message.textContent = "Sending your issue for review…";
+      try {
+        const response = await fetch(`/api/payments/${encodeURIComponent(form.dataset.orderId ?? "")}/issues`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: data.get("reason"), caseType: data.get("caseType") })
+        });
+        const payload = await response.json() as { error?: { message?: string } };
+        if (!response.ok) throw new Error(payload.error?.message || "The issue could not be submitted.");
+        if (message) {
+          message.className = "form-success";
+          message.textContent = "Issue received. The creator payout is now on hold while we review it.";
+        }
+        form.querySelectorAll("input, textarea, select")
+          .forEach((field) => field.setAttribute("disabled", ""));
+      } catch (error) {
+        if (message) {
+          message.className = "form-error";
+          message.textContent = error instanceof Error ? error.message : "The issue could not be submitted.";
+        }
+        if (submit) submit.disabled = false;
+      }
+    });
+  });
+</script>

@@ -1,0 +1,59 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+import { formatPrice } from "@/lib/courses";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in");
+const courseId = Astro.params.courseId ?? "";
+const response = await requestApi(`/api/tutor/courses/${encodeURIComponent(courseId)}/studio`, { userId });
+if (!response.ok) return Astro.redirect("/tutor");
+const data = await response.json<{
+  course: {
+    id: string; title: string; description: string; subject: string; primary_level: string;
+    delivery_mode: string; currency: string;
+  };
+  modules: Array<{ id: string; title: string; position: number }>;
+  lessons: Array<{
+    id: string; module_id: string; title: string; lesson_type: string;
+    delivery_mode: string; position: number;
+  }>;
+  assessments: Array<{ id: string; title: string; assessment_type: string; status: string }>;
+  flashcardDecks: Array<{ id: string; title: string; status: string }>;
+  materials: Array<{ id: string; title: string; description: string; material_type: string; status: string }>;
+  offerings: Array<{
+    id: string; title: string; price_cents: number; currency: string;
+    offering_type: string; delivery_mode: string; status: string;
+  }>;
+  sessions: Array<{
+    id: string; title: string; delivery_mode: string; starts_at: string; venue_name: string | null;
+  }>;
+}>();
+---
+<BaseLayout title={`Preview: ${data.course.title} — PencilScope`}>
+  <div class="preview-banner"><div class="shell"><strong>Creator preview</strong><span>This is how the course structure will feel to a learner.</span><a class="button button-small" href={`/tutor?courseId=${courseId}&section=overview`}>Back to studio</a></div></div>
+  <section class="dashboard-hero learning-hero"><div class="shell">
+    <span class="eyebrow">{data.course.subject} · {data.course.primary_level}</span>
+    <h1>{data.course.title}</h1><p>{data.course.description}</p>
+    <div class="feature-pills"><small>{data.course.delivery_mode}</small><small>{data.modules.length} modules</small><small>{data.lessons.length} lessons</small></div>
+  </div></section>
+  <section class="shell preview-layout">
+    <main>
+      <div class="preview-heading"><span class="eyebrow">Curriculum</span><h2>What learners will explore</h2></div>
+      {!data.modules.length && <p class="form-message">Add a curriculum module to see the learner outline.</p>}
+      {data.modules.map((module) => <section class="learning-module">
+        <div class="module-heading"><span>{String(module.position).padStart(2, "0")}</span><h2>{module.title}</h2></div>
+        <div class="lesson-list">{data.lessons.filter((lesson) => lesson.module_id === module.id).map((lesson) => <article class="lesson-row">
+          <div class="lesson-kind">{lesson.lesson_type}</div>
+          <div><h3>{lesson.title}</h3><small>{lesson.delivery_mode.replace("_", " ")} · learner activity preview</small></div>
+          <span class="studio-status draft">Preview</span>
+        </article>)}</div>
+      </section>)}
+      <div class="preview-resource-grid">
+        <section class="panel"><span class="eyebrow">Knowledge checks</span><h2>Assessments</h2>{data.assessments.map((assessment) => <div class="preview-list-row"><strong>{assessment.title}</strong><small>{assessment.assessment_type.replace("_", " ")} · {assessment.status}</small></div>)}{!data.assessments.length && <p>No assessments yet.</p>}</section>
+        <section class="panel"><span class="eyebrow">Resources</span><h2>Study materials</h2>{data.materials.map((material) => <div class="preview-list-row"><strong>{material.title}</strong><small>{material.material_type} · {material.status}</small></div>)}{data.flashcardDecks.map((deck) => <div class="preview-list-row"><strong>{deck.title}</strong><small>flashcards · {deck.status}</small></div>)}{!data.materials.length && !data.flashcardDecks.length && <p>No resources yet.</p>}</section>
+      </div>
+    </main>
+    <aside class="panel preview-access"><span class="eyebrow">Available access</span><h2>Offerings</h2>{data.offerings.map((offering) => <div class="preview-offering"><span>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><strong>{offering.title}</strong><small>{formatPrice(offering.price_cents, offering.currency)} · {offering.status}</small></div>)}{!data.offerings.length && <p>Create an offering to define pricing and access.</p>}<a class="button button-full" href={`/tutor?courseId=${courseId}&section=offerings`}>Manage offerings</a></aside>
+  </section>
+</BaseLayout>

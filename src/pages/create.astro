@@ -1,0 +1,314 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import CreateWithAI from "@/components/CreateWithAI.astro";
+import ProductIcon from "@/components/ProductIcon.astro";
+import { requestApi } from "@/lib/api-client";
+import { learningProductMeta, learningProductTypes, type LearningProduct } from "@/lib/learning-products";
+import { creatorProductCatalogue, productCatalogueKey } from "@/lib/product-catalog";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/create");
+const response = await requestApi("/api/creator/learning-products", { userId });
+if (response.status === 401) return Astro.redirect("/sign-in?next=/create");
+const products = response.ok
+  ? (await response.json<{ products: LearningProduct[] }>()).products
+  : [];
+type SelectedLibraryItem = { id: string; title: string; contentUrl: string | null; mediaType: string; itemKind: string };
+const selectedLibraryItemId = (Astro.url.searchParams.get("libraryItem") ?? "").slice(0, 100);
+let selectedLibraryItem: SelectedLibraryItem | null = null;
+let assessmentMediaItems: SelectedLibraryItem[] = [];
+const libraryResponse = await requestApi("/api/creator/content-library", { userId });
+if (libraryResponse.ok) {
+  const libraryItems = (await libraryResponse.json<{ items: SelectedLibraryItem[] }>()).items;
+  selectedLibraryItem = libraryItems.find((item) => item.id === selectedLibraryItemId) ?? null;
+  assessmentMediaItems = libraryItems.filter((item) => item.itemKind === "file" && ["image", "video", "audio"].includes(item.mediaType));
+}
+const editId = Astro.url.searchParams.get("edit");
+const editProduct = editId ? products.find((product) => product.id === editId) ?? null : null;
+const requestedStatus = Astro.url.searchParams.get("status") ?? "all";
+const allowedStatuses = new Set(["all", "draft", "published", "unpublished", "archived"]);
+const statusFilter = allowedStatuses.has(requestedStatus) ? requestedStatus : "all";
+const productDisplayStatus = (product: LearningProduct) =>
+  product.status === "published" && product.listing_status === "unpublished" ? "unpublished" : product.status;
+const visibleProducts = statusFilter === "all"
+  ? products
+  : products.filter((product) => productDisplayStatus(product) === statusFilter);
+const requestedProductType = learningProductTypes.find((type) => type === Astro.url.searchParams.get("type"))
+  ?? learningProductTypes[0];
+const requestedProductLabel = learningProductMeta[requestedProductType].label.toLowerCase();
+const primaryStandaloneTypes = ["audio", "ebook", "quiz", "test", "mock_exam"] as const;
+const editorProductTypes = editProduct && !primaryStandaloneTypes.includes(editProduct.product_type as typeof primaryStandaloneTypes[number])
+  ? [editProduct.product_type, ...primaryStandaloneTypes]
+  : primaryStandaloneTypes;
+---
+<BaseLayout title="Create learning content — PencilScope" description="Create a course, ebook, assessment, video, audio lesson or reading material.">
+  <section class="creator-hub-hero">
+    <div class="shell">
+      <a class="back-link" href="/dashboard?workspace=creation">← My Creations</a>
+      <span class="eyebrow">Creator hub</span><h1>What would you like to create?</h1>
+      <p>Choose a format and start creating. Courses can combine classes, videos, ebooks, assessments and reading materials into one priced offer.</p>
+      <nav class="unified-create-menu" aria-label="Choose product type">{creatorProductCatalogue.map((product) => <a class:list={{ active: product.href.includes(`type=${requestedProductType}`) }} href={product.href}><ProductIcon name={product.key} /><strong>{product.label}</strong><small>{product.shortDescription}</small></a>)}</nav>
+    </div>
+  </section>
+
+  <section class="shell creator-hub-layout" id="create-product">
+    <main class="panel create-product-panel">
+      <div class="create-panel-heading"><div><span class="eyebrow">Learning product</span><h2>{editProduct ? `Edit ${editProduct.title}` : `Create ${learningProductMeta[requestedProductType].label.toLowerCase()}`}</h2></div><CreateWithAI compact /></div>
+      {editId && !editProduct && <p class="form-error">That product is unavailable or you do not have permission to edit it.</p>}
+      <form class="stack-form product-create-form" data-edit-id={editProduct?.id ?? ""} data-library-item-id={selectedLibraryItem?.id ?? ""} data-questions={JSON.stringify(editProduct?.questions ?? [])}>
+        <div class="product-type-picker">
+          {editorProductTypes.map((type) => <label>
+            <input type="radio" name="productType" value={type} checked={editProduct ? editProduct.product_type === type : type === requestedProductType} disabled={Boolean(editProduct && editProduct.product_type !== type)} />
+            <span class="product-symbol">{learningProductMeta[type].symbol}</span>
+            <strong>{learningProductMeta[type].label}</strong><small>{learningProductMeta[type].description}</small>
+          </label>)}
+        </div>
+        <div class="form-columns">
+          <label>Title<input name="title" required minlength="3" maxlength="140" placeholder="A clear, useful title" value={editProduct?.title ?? ""} /></label>
+          <label>Topic<input name="subject" required maxlength="120" placeholder="Mathematics, design, leadership…" value={editProduct?.subject ?? ""} /></label>
+          <label>Audience<input name="audience" required maxlength="120" placeholder="Beginners, Secondary 4, managers…" value={editProduct?.audience ?? ""} /></label>
+          <label>Estimated time (minutes)<input name="estimatedMinutes" type="number" min="1" max="10000" value={editProduct?.estimated_minutes ?? 20} required /></label>
+        </div>
+        <label>Description<textarea name="description" required minlength="20" maxlength="2000" rows="4" placeholder="What will someone learn or be able to practise?">{editProduct?.description ?? ""}</textarea></label>
+
+        <section class="resource-fields">
+          {selectedLibraryItem && <p class="library-selection-banner"><span aria-hidden="true">▦</span><span><strong>Using {selectedLibraryItem.title}</strong><small>Private Content Library · {selectedLibraryItem.mediaType}</small></span><a href="/content-library">Change</a></p>}
+          <label>Content link<input name="contentUrl" type="url" placeholder="https://…" value={editProduct?.content_url ?? (selectedLibraryItem?.contentUrl ? new URL(selectedLibraryItem.contentUrl, Astro.url.origin).toString() : "")} /></label>
+          <p class="form-message">Choose a private source from your Content Library or link to trusted hosting. Access remains restricted to authorised learners.</p>
+          {!selectedLibraryItem && <a class="button button-small button-secondary content-library-picker" href="/content-library">Choose from Content Library</a>}
+        </section>
+
+        <section class="assessment-fields" hidden>
+          <div class="form-columns">
+            <label>Pass mark %<input name="passingScore" type="number" min="0" max="100" value={editProduct?.passing_score ?? 50} /></label>
+            <label>Time limit (minutes)<input name="timeLimitMinutes" type="number" min="1" value={editProduct?.time_limit_minutes ?? 20} /></label>
+          </div>
+          <div class="question-builder-heading"><div><span class="eyebrow">Question builder</span><h3>Build the assessment</h3></div><button class="button button-small button-secondary add-question" type="button">＋ Add question</button></div>
+          <div class="standalone-question-builder"></div>
+        </section>
+
+        <div class="create-actions">
+          <button class="button button-secondary" type="submit" value="draft">{editProduct ? "Save changes" : "Save draft"}</button>
+          {editProduct?.status !== "published" && <button class="button" type="submit" value="published">Publish now</button>}
+          {editProduct && <a class="text-link" href="/create#create-product">Cancel editing</a>}
+        </div>
+        <p class="form-message create-product-message" aria-live="polite"></p>
+      </form>
+    </main>
+
+    <aside class="creator-product-list">
+      <div class="panel"><span class="eyebrow">Your products</span><h2>{products.length} created</h2>
+        <nav class="content-status-filters" aria-label="Filter creator content">
+          {["all", "draft", "published", "unpublished", "archived"].map((status) => <a class:list={{ active: statusFilter === status }} href={`/create?status=${status}#create-product`}>{status}</a>)}
+        </nav>
+        {!products.length && <div class="creator-empty-state"><span class="product-symbol">＋</span><strong>Create your first {requestedProductLabel} and sell it</strong><p>Use the form to build the content, then include it in a priced offer and publish it for learners.</p></div>}
+        <div class="creator-product-cards">{visibleProducts.map((product) => {
+          const meta = learningProductMeta[product.product_type];
+          const displayStatus = productDisplayStatus(product);
+          return <article><ProductIcon name={productCatalogueKey(product.product_type)} size="small" /><div><a class="content-title-link" href={`/dashboard?workspace=creation&section=product&productId=${product.id}`}><strong>{product.title}</strong></a><small>{meta.label} · {displayStatus} · version {product.content_version ?? 1}</small><code class="product-id">ID {product.id}</code></div>
+            <a class="text-link" href={`/dashboard?workspace=creation&section=product&productId=${product.id}`}>Dashboard</a>
+            {product.status === "draft" && <a class="text-link" href={`/create?edit=${product.id}#create-product`}>Edit</a>}
+            {product.status === "draft" && <button class="text-link publish-product" data-id={product.id}>Publish</button>}
+            {product.status === "draft" && <button class="text-link danger-link delete-product" data-id={product.id}>Delete draft</button>}
+            {product.status === "published" && <button class="text-link copy-product" data-id={product.id}>New version</button>}
+            {product.status === "published" && product.listing_status !== "unpublished" && <button class="text-link lifecycle-product" data-id={product.id} data-action="unpublish">Unpublish</button>}
+            {product.status === "published" && product.listing_status === "unpublished" && <button class="text-link lifecycle-product" data-id={product.id} data-action="republish">Republish</button>}
+            {product.status === "published" && product.listing_status !== "unpublished" && <a href={`/library/${product.slug}`}>View →</a>}
+          </article>;
+        })}</div>
+        {products.length > 0 && !visibleProducts.length && <div class="creator-empty-state compact"><strong>No products match this status.</strong><p>Your products are still available in another status view.</p><a class="text-link" href="/create?status=all#create-product">Show all products →</a></div>}
+      </div>
+      <div class="panel"><span class="eyebrow">Native authoring</span><h2>Write an ebook.</h2><p>Create chapters, preview the reader and publish directly to the learning library.</p><a class="button button-secondary" href="/ebook-studio">Open ebook studio</a></div>
+    </aside>
+  </section>
+</BaseLayout>
+
+<template id="question-template">
+  <fieldset class="standalone-question-editor" data-question-id="">
+    <legend>Question <span class="question-number"></span></legend>
+    <button type="button" class="remove-question" aria-label="Remove question">×</button>
+    <label>Question prompt<textarea data-field="prompt" rows="2" required></textarea></label>
+    <div class="question-media-editor">
+      <label>Optional image, video or audio<select data-field="mediaLibraryItemId"><option value="">No media</option>{assessmentMediaItems.map((item) => <option value={item.id}>{item.title} · {item.mediaType}</option>)}</select></label>
+      <label>Image description<input data-field="mediaAltText" maxlength="500" placeholder="Required when an image is selected" /></label>
+      <label>Caption or transcript<textarea data-field="mediaCaption" maxlength="1000" rows="2" placeholder="Optional context for learners"></textarea></label>
+      <small>Media is selected from My Content Library and pinned to its current version when saved.</small>
+    </div>
+    <div class="option-editor">
+      <label>Option A<input data-option="0" required /></label><label>Option B<input data-option="1" required /></label>
+      <label>Option C<input data-option="2" /></label><label>Option D<input data-option="3" /></label>
+    </div>
+    <label>Correct answer<select data-field="correctIndex"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
+    <label>Explanation <small>Optional</small><textarea data-field="explanation" rows="2" placeholder="Explain why this answer is correct."></textarea></label>
+  </fieldset>
+</template>
+
+<script>
+  const form = document.querySelector<HTMLFormElement>(".product-create-form");
+  const typeInputs = [...document.querySelectorAll<HTMLInputElement>('input[name="productType"]')];
+  const resourceFields = document.querySelector<HTMLElement>(".resource-fields");
+  const assessmentFields = document.querySelector<HTMLElement>(".assessment-fields");
+  const questionBuilder = document.querySelector<HTMLElement>(".standalone-question-builder");
+  const template = document.querySelector<HTMLTemplateElement>("#question-template");
+  const assessmentTypes = new Set(["quiz", "test", "mock_exam"]);
+
+  function renumberQuestions() {
+    questionBuilder?.querySelectorAll<HTMLElement>(".standalone-question-editor").forEach((editor, index) => {
+      const number = editor.querySelector<HTMLElement>(".question-number");
+      if (number) number.textContent = String(index + 1);
+    });
+  }
+  function addQuestion(question?: { id?: string; prompt?: string; options?: string[]; correctIndex?: number; explanation?: string; media?: { libraryItemId?: string; altText?: string; caption?: string } }) {
+    if (!template || !questionBuilder) return;
+    const fragment = template.content.cloneNode(true) as DocumentFragment;
+    fragment.querySelector(".remove-question")?.addEventListener("click", (event) => {
+      (event.currentTarget as HTMLElement).closest(".standalone-question-editor")?.remove();
+      renumberQuestions();
+    });
+    const editor = fragment.querySelector<HTMLElement>(".standalone-question-editor");
+    if (editor && question) {
+      editor.dataset.questionId = question.id ?? "";
+      (editor.querySelector('[data-field="prompt"]') as HTMLTextAreaElement).value = question.prompt ?? "";
+      editor.querySelectorAll<HTMLInputElement>("[data-option]").forEach((input, index) => {
+        input.value = question.options?.[index] ?? "";
+      });
+      (editor.querySelector('[data-field="correctIndex"]') as unknown as HTMLSelectElement).value = String(question.correctIndex ?? 0);
+      (editor.querySelector('[data-field="explanation"]') as HTMLTextAreaElement).value = question.explanation ?? "";
+      (editor.querySelector('[data-field="mediaLibraryItemId"]') as unknown as HTMLSelectElement).value = question.media?.libraryItemId ?? "";
+      (editor.querySelector('[data-field="mediaAltText"]') as HTMLInputElement).value = question.media?.altText ?? "";
+      (editor.querySelector('[data-field="mediaCaption"]') as HTMLTextAreaElement).value = question.media?.caption ?? "";
+    }
+    questionBuilder.appendChild(fragment);
+    renumberQuestions();
+  }
+  function updateTypeFields() {
+    const type = typeInputs.find((input) => input.checked)?.value ?? "ebook";
+    const assessment = assessmentTypes.has(type);
+    if (resourceFields) resourceFields.hidden = assessment;
+    if (assessmentFields) assessmentFields.hidden = !assessment;
+    const contentUrl = form?.elements.namedItem("contentUrl") as HTMLInputElement | null;
+    if (contentUrl) contentUrl.required = !assessment;
+    if (assessment && !questionBuilder?.children.length) addQuestion();
+  }
+  typeInputs.forEach((input) => input.addEventListener("change", updateTypeFields));
+  document.querySelector(".add-question")?.addEventListener("click", () => addQuestion());
+  const savedQuestions = (() => {
+    try { return JSON.parse(form?.dataset.questions ?? "[]") as Array<{ id?: string; prompt?: string; options?: string[]; correctIndex?: number; explanation?: string; media?: { libraryItemId?: string; altText?: string; caption?: string } }>; }
+    catch { return []; }
+  })();
+  savedQuestions.forEach((question) => addQuestion(question));
+  updateTypeFields();
+
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submitter = event.submitter as HTMLButtonElement | null;
+    const data = new FormData(form);
+    const productType = String(data.get("productType") ?? "");
+    const questions = [...form.querySelectorAll<HTMLElement>(".standalone-question-editor")].map((editor) => ({
+      id: editor.dataset.questionId || undefined,
+      prompt: (editor.querySelector('[data-field="prompt"]') as HTMLTextAreaElement).value,
+      options: [...editor.querySelectorAll<HTMLInputElement>("[data-option]")].map((input) => input.value).filter(Boolean),
+      correctIndex: Number((editor.querySelector('[data-field="correctIndex"]') as unknown as { value?: string } | null)?.value ?? 0),
+      explanation: (editor.querySelector('[data-field="explanation"]') as HTMLTextAreaElement).value,
+      mediaLibraryItemId: (editor.querySelector('[data-field="mediaLibraryItemId"]') as unknown as HTMLSelectElement).value,
+      mediaAltText: (editor.querySelector('[data-field="mediaAltText"]') as HTMLInputElement).value,
+      mediaCaption: (editor.querySelector('[data-field="mediaCaption"]') as HTMLTextAreaElement).value
+    }));
+    const payload = {
+      productType,
+      title: data.get("title"),
+      subject: data.get("subject"),
+      audience: data.get("audience"),
+      estimatedMinutes: Number(data.get("estimatedMinutes")),
+      description: data.get("description"),
+      contentUrl: data.get("contentUrl"),
+      passingScore: Number(data.get("passingScore")),
+      timeLimitMinutes: Number(data.get("timeLimitMinutes")),
+      questions,
+      status: submitter?.value === "published" ? "published" : "draft"
+    };
+    const buttons = [...form.querySelectorAll<HTMLButtonElement>('button[type="submit"]')];
+    buttons.forEach((button) => button.disabled = true);
+    const message = form.querySelector<HTMLElement>(".create-product-message");
+    const editId = form.dataset.editId;
+    const response = await fetch(editId ? `/api/creator/learning-products/${encodeURIComponent(editId)}` : "/api/creator/learning-products", {
+      method: editId ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json().catch(() => ({})) as { error?: { message?: string }; product?: { id?: string; slug: string; status: string } };
+    if (message) {
+      message.className = response.ok ? "form-success create-product-message" : "form-error create-product-message";
+      message.textContent = response.ok
+        ? result.product?.status === "published" ? "Published. Opening the product page…" : "Draft saved. Refreshing your creator hub…"
+        : result.error?.message ?? "The learning product could not be saved.";
+    }
+    if (response.ok) {
+      const libraryItemId = form.dataset.libraryItemId;
+      const savedProductId = editId || result.product?.id;
+      if (libraryItemId && savedProductId) {
+        await fetch("/api/creator/content-library/items/" + encodeURIComponent(libraryItemId) + "/usages", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ entityType: "learning_product", entityId: savedProductId, usageLabel: String(data.get("title") ?? "") })
+        });
+      }
+      if (editId && submitter?.value === "published" && result.product?.status !== "published") {
+        await fetch(`/api/creator/learning-products/${encodeURIComponent(editId)}/publish`, { method: "POST" });
+      }
+      if (editId && submitter?.value !== "published") {
+        buttons.forEach((button) => button.disabled = false);
+        return;
+      }
+      window.location.href = result.product?.status === "published" && result.product.slug
+        ? `/library/${result.product.slug}`
+        : result.product?.id ? `/create?edit=${encodeURIComponent(result.product.id)}#create-product` : "/create#create-product";
+      return;
+    }
+    buttons.forEach((button) => button.disabled = false);
+  });
+
+  document.querySelectorAll<HTMLButtonElement>(".publish-product").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const response = await fetch(`/api/creator/learning-products/${encodeURIComponent(button.dataset.id ?? "")}/publish`, { method: "POST" });
+      if (response.ok) window.location.reload();
+      else {
+        button.disabled = false;
+        button.textContent = "Try again";
+      }
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>(".lifecycle-product").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const action = button.dataset.action ?? "";
+      const response = await fetch(`/api/creator/learning-products/${encodeURIComponent(button.dataset.id ?? "")}/${action}`, { method: "POST" });
+      if (response.ok) window.location.reload();
+      else { button.disabled = false; button.textContent = "Try again"; }
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>(".copy-product").forEach((button) => {
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "Copying…";
+      const response = await fetch(`/api/creator/learning-products/${encodeURIComponent(button.dataset.id ?? "")}/copy`, { method: "POST" });
+      const result = await response.json().catch(() => ({})) as { product?: { id?: string } };
+      if (response.ok && result.product?.id) {
+        window.location.href = `/create?edit=${encodeURIComponent(result.product.id)}#create-product`;
+      } else {
+        button.disabled = false;
+        button.textContent = "Try again";
+      }
+    });
+  });
+  document.querySelectorAll<HTMLButtonElement>(".delete-product").forEach((button) => {
+    button.addEventListener("click", async () => {
+      if (!window.confirm("Delete this draft permanently?")) return;
+      button.disabled = true;
+      const response = await fetch(`/api/creator/learning-products/${encodeURIComponent(button.dataset.id ?? "")}`, { method: "DELETE" });
+      if (response.ok) window.location.reload();
+      else { button.disabled = false; button.textContent = "Could not delete"; }
+    });
+  });
+</script>

@@ -20,5 +20,15 @@ export const POST: APIRoute = async ({ request, locals, session, redirect }) => 
     return redirect(`/sign-in?error=${encodeURIComponent(result.error?.message ?? "Sign in failed.")}&next=${encodeURIComponent(next)}`, 303);
   }
   session?.set("userId", result.user.id);
+  const sessionId = crypto.randomUUID();
+  session?.set("sessionId", sessionId);
+  await getEnv(locals).API.fetch("https://pencilscope-api.internal/api/sessions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-pencilscope-user-id": result.user.id
+    },
+    body: JSON.stringify({ sessionId, userAgent: request.headers.get("user-agent") ?? "" })
+  });
   return redirect(next, 303);
 };

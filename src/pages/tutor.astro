@@ -1,6 +1,9 @@
 ---
 import BaseLayout from "@/layouts/BaseLayout.astro";
 import { requestApi } from "@/lib/api-client";
+import { learningProductMeta, type LearningProductType } from "@/lib/learning-products";
+import ProductIcon from "@/components/ProductIcon.astro";
+import { courseDeliveryModeForProduct, creatorProductCatalogue } from "@/lib/product-catalog";
 
 const userId = await Astro.session?.get("userId");
 if (typeof userId !== "string") return Astro.redirect("/sign-in");
@@ -8,36 +11,145 @@ const dashboardResponse = await requestApi("/api/dashboard", { userId });
 if (!dashboardResponse.ok) return Astro.redirect("/sign-in");
 const dashboard = await dashboardResponse.json<{
   user: { id: string; role: string; display_name: string };
-  creatorCourses?: Array<{ id: string; title: string; status: string; pricing_status: string }>;
+  creatorCourses?: Array<{ id: string; title: string; status: string; pricing_status: string; enrolment_count: number }>;
 }>();
+type AssessmentMediaItem = { id: string; title: string; mediaType: string; itemKind: string; contentUrl: string | null };
+let assessmentMediaItems: AssessmentMediaItem[] = [];
+const libraryResponse = await requestApi("/api/creator/content-library", { userId });
+if (libraryResponse.ok) {
+  assessmentMediaItems = (await libraryResponse.json<{ items: AssessmentMediaItem[] }>()).items
+    .filter((item) => item.itemKind === "file" && ["image", "video", "audio"].includes(item.mediaType));
+}
 const selectedId = Astro.url.searchParams.get("courseId");
+const createMode = Astro.url.searchParams.get("mode") === "new";
+const requestedCourseProduct = Astro.url.searchParams.get("product");
+const requestedCourseDelivery = courseDeliveryModeForProduct(requestedCourseProduct);
+const requestedCourseLabel = creatorProductCatalogue.find((item) => item.key === requestedCourseProduct)?.label ?? "Course";
+const studioSections = ["overview", "offerings", "curriculum", "assessments", "results", "resources", "sessions", "learners", "team", "publish"] as const;
+type StudioSection = typeof studioSections[number];
+const requestedSection = Astro.url.searchParams.get("section");
+const activeSection: StudioSection = studioSections.includes(requestedSection as StudioSection)
+  ? requestedSection as StudioSection
+  : "overview";
 let studio: {
-  course: { id: string; title: string; status: string; pricing_status: string };
+  course: {
+    id: string; slug: string; title: string; description: string; subject: string; primary_level: string;
+    delivery_mode: string; price_cents: number; currency: string; status: string; pricing_status: string;
+    listing_status: "listed" | "unlisted" | "delisted"; delisted_at: string | null;
+    delisted_reason: string | null; member_role: string; content_version: number; source_course_id: string | null;
+    cover_asset_id: string | null;
+  };
   modules: Array<{ id: string; title: string; position: number }>;
   lessons: Array<{ id: string; module_id: string; title: string; lesson_type: string; delivery_mode: string; course_session_id: string | null; position: number }>;
-  assessments: Array<{ id: string; title: string; assessment_type: string; status: string }>;
+  assessments: Array<{
+    id: string; title: string; assessment_type: string; instructions: string;
+    time_limit_seconds: number | null; attempt_limit: number | null; passing_score: number;
+    feedback_mode: string; status: string; version: number;
+  }>;
+  assessmentQuestions: Array<{
+    id: string; assessment_id: string; question_type: string; prompt: string;
+    explanation: string; points: number; position: number;
+  }>;
+  assessmentOptions: Array<{
+    id: string; question_id: string; label: string; is_correct: number; position: number;
+  }>;
+  assessmentQuestionMedia: Array<{
+    question_id: string; library_item_id: string; media_type: "image" | "video" | "audio";
+    alt_text: string; caption: string;
+  }>;
   flashcardDecks: Array<{ id: string; title: string; status: string }>;
   offerings: Array<{
-    id: string; title: string; price_cents: number; currency: string; status: string;
+    id: string; title: string; price_cents: number; creator_price_cents: number;
+    platform_fixed_fee_cents: number; service_fee_bps: number; service_fee_cents: number;
+    planned_meeting_minutes: number; planned_meeting_participants: number;
+    planned_paid_learners: number; planned_meeting_cost_cents: number;
+    currency: string; status: string;
     pricing_status: string; academic_year: number; term_number: number;
     offering_type: string; delivery_mode: string; starts_at: string | null; ends_at: string | null; capacity: number | null;
   }>;
-  materials: Array<{ id: string; title: string; description: string; material_type: string; status: string }>;
+  materials: Array<{ id: string; title: string; description: string; material_type: string; resource_kind: string; content_kind: string; status: string }>;
   offeringModules: Array<{ course_offering_id: string; module_id: string }>;
   offeringAssessments: Array<{ course_offering_id: string; assessment_id: string }>;
   offeringDecks: Array<{ course_offering_id: string; deck_id: string }>;
   offeringMaterials: Array<{ course_offering_id: string; material_id: string }>;
+  learningProducts: Array<{
+    id: string; slug: string; title: string; description: string; product_type: LearningProductType;
+    estimated_minutes: number | null; price_cents: number; currency: string; status: string;
+  }>;
+  offeringLearningProducts: Array<{
+    course_offering_id: string; learning_product_id: string; position: number; release_at: string | null;
+  }>;
   categories: Array<{ id: string; slug: string; title: string; selected: number }>;
   sessions: Array<{
     id: string; course_offering_id: string; title: string; delivery_mode: string;
     starts_at: string; ends_at: string; timezone: string; capacity: number | null;
     meeting_url: string | null; venue_name: string | null; address_line_1: string | null;
+    instructor_user_id: string | null; instructor_name: string | null;
+  }>;
+  learners: Array<{
+    id: string; display_name: string; email: string; offering_title: string;
+    status: string; enrolled_at: string; progress_percent: number;
   }>;
 } | null = null;
+let invitations: Array<{
+  id: string; course_offering_id: string; offering_title: string; recipient_email: string;
+  status: string; delivery_status: string; expires_at: string; opened_at: string | null;
+  converted_at: string | null; created_at: string;
+}> = [];
+let team: Array<{
+  user_id: string; display_name: string; email: string; member_role: string;
+  status: string; created_at: string; updated_at: string;
+}> = [];
+let teamInvitations: Array<{
+  id: string; email: string; member_role: string; status: string; delivery_status: string;
+  expires_at: string; created_at: string;
+}> = [];
+let courseRole = "";
+let resultSummary: Array<{
+  id: string; title: string; assessment_type: string; attempt_count: number;
+  learner_count: number; average_score: number | null; passed_count: number; grading_count: number;
+}> = [];
+let resultAttempts: Array<{
+  id: string; assessment_title: string; assessment_type: string; learner_name: string;
+  learner_email: string; status: string; started_at: string; submitted_at: string | null;
+  score: number | null; passed: number | null;
+}> = [];
 let studioError = "";
 if (selectedId) {
   const studioResponse = await requestApi(`/api/tutor/courses/${encodeURIComponent(selectedId)}/studio`, { userId });
-  if (studioResponse.ok) studio = await studioResponse.json();
+  if (studioResponse.ok) {
+    studio = await studioResponse.json();
+    const invitationsResponse = await requestApi(
+      `/api/tutor/courses/${encodeURIComponent(selectedId)}/invitations`,
+      { userId }
+    );
+    if (invitationsResponse.ok) {
+      invitations = (await invitationsResponse.json<{ invitations: typeof invitations }>()).invitations;
+    }
+    const teamResponse = await requestApi(
+      `/api/tutor/courses/${encodeURIComponent(selectedId)}/team`,
+      { userId }
+    );
+    if (teamResponse.ok) {
+      const teamData = await teamResponse.json<{
+        role: string; members: typeof team; invitations: typeof teamInvitations;
+      }>();
+      team = teamData.members;
+      teamInvitations = teamData.invitations ?? [];
+      courseRole = teamData.role;
+    }
+    const resultsResponse = await requestApi(
+      `/api/tutor/courses/${encodeURIComponent(selectedId)}/results`,
+      { userId }
+    );
+    if (resultsResponse.ok) {
+      const resultData = await resultsResponse.json<{
+        summary: typeof resultSummary; attempts: typeof resultAttempts;
+      }>();
+      resultSummary = resultData.summary;
+      resultAttempts = resultData.attempts;
+    }
+  }
   else {
     const problem: { error?: { message?: string } } =
       await studioResponse.json<{ error?: { message?: string } }>().catch(() => ({}));
@@ -47,89 +159,207 @@ if (selectedId) {
 const requestedOfferingId = Astro.url.searchParams.get("offeringId");
 const selectedOfferingId = requestedOfferingId ?? studio?.offerings[0]?.id ?? "";
 const selectedOffering = studio?.offerings.find((offering) => offering.id === selectedOfferingId);
+const selectedLearningProductIds = new Set(
+  studio?.offeringLearningProducts
+    .filter((link) => link.course_offering_id === selectedOfferingId)
+    .map((link) => link.learning_product_id) ?? []
+);
+const studioUrl = (section: StudioSection, offeringId = selectedOfferingId) => selectedId
+  ? `/tutor?courseId=${encodeURIComponent(selectedId)}&section=${section}${offeringId ? `&offeringId=${encodeURIComponent(offeringId)}` : ""}`
+  : "/tutor";
+const draftAssessmentCount = studio?.assessments.filter((assessment) => assessment.status === "draft").length ?? 0;
+const publishedOfferingCount = studio?.offerings.filter((offering) => offering.status === "published" && offering.pricing_status === "ready").length ?? 0;
+const readiness = studio ? [
+  { label: "Course description", complete: studio.course.description.trim().length >= 20 },
+  { label: "Curriculum module", complete: studio.modules.length > 0 },
+  { label: "Learning lesson", complete: studio.lessons.length > 0 },
+  { label: "Published offering and price", complete: publishedOfferingCount > 0 },
+  { label: "No draft assessments", complete: draftAssessmentCount === 0 }
+] : [];
+const readinessComplete = readiness.filter((item) => item.complete).length;
 ---
 <BaseLayout title="Creator studio — PencilScope">
   <section class="dashboard-hero"><div class="shell">
-    <a class="back-link" href="/dashboard">← Dashboard</a>
+    <a class="back-link" href="/create">← Creator hub</a>
     <span class="eyebrow">Creator studio</span><h1>Turn what you know into a course.</h1>
     <p>Create self-paced training, a live cohort, an in-person event, or an academic term. Mix recorded lessons, online sessions, venues, materials and assessments.</p>
   </div></section>
   <section class="shell studio-layout">
     <aside class="panel studio-sidebar">
-      <h2>Courses</h2>
-      <nav>
+      <div class="studio-sidebar-heading"><span class="eyebrow">Workspace</span><h2>Courses</h2></div>
+      <nav class="studio-course-list">
         {dashboard.creatorCourses?.map((course) => (
-          <a class:list={{ active: course.id === selectedId }} href={`/tutor?courseId=${course.id}`}>
+          <a class:list={{ active: course.id === selectedId }} href={`/tutor?courseId=${course.id}&section=overview`}>
             <strong>{course.title}</strong><small>{course.status} · {course.pricing_status}</small>
           </a>
         ))}
       </nav>
-      <details open={!dashboard.creatorCourses?.length}>
-        <summary>Create course</summary>
-        <form class="stack-form api-form" data-kind="course" action="/api/tutor/courses" method="post">
-          <label>Title<input name="title" required minlength="3" /></label>
-          <label>Description<textarea name="description" required minlength="20" rows="4"></textarea></label>
-          <label>Topic<input name="subject" required placeholder="Mathematics, leadership, cooking…" /></label>
-          <label>Audience<input name="primaryLevel" required placeholder="Beginners, professionals, Primary 5…" /></label>
-          <label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing">Knowledge sharing</option><option value="seminar">Seminar</option><option value="workshop">Workshop</option><option value="coaching">Coaching</option><option value="certification-preparation">Certification preparation</option></select></label>
-          <label>Primary delivery<select name="deliveryMode"><option value="self-paced">Recorded / self-paced</option><option value="live">Live online</option><option value="hybrid">Hybrid</option><option value="ai-supported">AI-supported</option></select></label>
-          <label>Default price (SGD)<input name="priceSGD" type="number" min="0.50" step="0.01" required /></label>
-          <button class="button" type="submit">Save draft</button>
-          <p class="form-message" aria-live="polite"></p>
-        </form>
-      </details>
+      {studio && <nav class="studio-module-nav" aria-label="Course studio sections">
+        <a class:list={{ active: activeSection === "overview" }} href={studioUrl("overview")}><span>Overview</span><small>{readinessComplete}/{readiness.length} ready</small></a>
+        <a class:list={{ active: activeSection === "offerings" }} href={studioUrl("offerings")}><span>Offerings</span><small>{studio.offerings.length}</small></a>
+        <a class:list={{ active: activeSection === "curriculum" }} href={studioUrl("curriculum")}><span>Curriculum</span><small>{studio.modules.length} modules · {studio.lessons.length} lessons</small></a>
+        <a class:list={{ active: activeSection === "assessments" }} href={studioUrl("assessments")}><span>Assessments</span><small>{studio.assessments.length}{draftAssessmentCount ? ` · ${draftAssessmentCount} draft` : ""}</small></a>
+        <a class:list={{ active: activeSection === "results" }} href={studioUrl("results")}><span>Results</span><small>{resultAttempts.length} attempts</small></a>
+        <a class:list={{ active: activeSection === "resources" }} href={studioUrl("resources")}><span>Resources & ebooks</span><small>{studio.materials.length + studio.flashcardDecks.length}</small></a>
+        <a class:list={{ active: activeSection === "sessions" }} href={studioUrl("sessions")}><span>Sessions</span><small>{studio.sessions.length}</small></a>
+        <a class:list={{ active: activeSection === "learners" }} href={studioUrl("learners")}><span>Learners & invites</span><small>{invitations.length}</small></a>
+        <a class:list={{ active: activeSection === "team" }} href={studioUrl("team")}><span>Team access</span><small>{team.filter((member) => member.status === "active").length}</small></a>
+        <a class:list={{ active: activeSection === "publish" }} href={studioUrl("publish")}><span>Publish</span><small>{studio.course.status}</small></a>
+      </nav>}
+      <a class:list={["studio-new-course", { active: createMode }]} href="/tutor?mode=new"><span>＋</span><strong>Create a new course</strong><small>Open the course form</small></a>
     </aside>
 
     <main class="studio-main">
       {studioError && <p class="form-error">{studioError}</p>}
-      {!selectedId && <article class="panel empty-state"><h2>Select a course</h2><p>Choose an existing course or create a new draft to start authoring.</p></article>}
+      {createMode && <article class="panel studio-create-course"><div class="studio-section-intro"><div class="product-heading-with-icon"><ProductIcon name={requestedCourseProduct === "online_course" || requestedCourseProduct === "in_person_course" || requestedCourseProduct === "video_course" ? requestedCourseProduct : "course"} size="large" /><div><span class="eyebrow">New learning product</span><h2>Create {requestedCourseLabel.toLowerCase()}</h2><p>Start with the learning promise. Add content, delivery and pricing after the private draft is saved.</p></div></div><a class="text-link" href="/dashboard?workspace=creation">Cancel</a></div><form class="stack-form api-form" data-kind="course" action="/api/tutor/courses" method="post"><div class="form-columns"><label>Title<input name="title" required minlength="3" /></label><label>Topic<input name="subject" required placeholder="Mathematics, leadership, cooking…" /></label><label>Audience<input name="primaryLevel" required placeholder="Beginners, professionals, Primary 5…" /></label><label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing">Knowledge sharing</option><option value="seminar">Seminar</option><option value="workshop">Workshop</option><option value="coaching">Coaching</option><option value="certification-preparation">Certification preparation</option></select></label><label>Primary delivery<select name="deliveryMode"><option value="self-paced" selected={requestedCourseDelivery === "self-paced"}>Recorded / self-paced</option><option value="live" selected={requestedCourseDelivery === "live"}>Live online</option><option value="hybrid" selected={requestedCourseDelivery === "hybrid"}>In person / hybrid</option><option value="ai-supported">AI-supported</option></select></label></div><label>Description<textarea name="description" required minlength="20" rows="5"></textarea></label><p class="meet-assurance"><strong>Draft first:</strong> This product remains private. Build the content, then configure a learner price and publish from the offer step. Online sessions receive Google Meet links when scheduled.</p><button class="button" type="submit">Save draft and continue</button><p class="form-message" aria-live="polite"></p></form></article>}
+      {!selectedId && !createMode && <article class="panel empty-state"><h2>Select a course</h2><p>Choose an existing course or create a new draft to start authoring.</p><a class="button button-small" href="/tutor?mode=new">Create a course</a></article>}
       {studio && (
         <>
           <article class="panel studio-heading">
-            <div><span class="eyebrow">{studio.course.status} · pricing {studio.course.pricing_status}</span><h2>{studio.course.title}</h2></div>
-            {studio.course.status !== "published" && <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/publish`} method="post"><button class="button" type="submit">Publish course & price</button><p class="form-message"></p></form>}
+            <div><span class="eyebrow">{activeSection} · {studio.course.status === "published" && studio.course.listing_status !== "listed" ? "unpublished" : studio.course.status} · version {studio.course.content_version ?? 1}</span><h2>{studio.course.title}</h2></div>
+            <div class="studio-heading-actions">
+              <a class="button button-small button-secondary" href={`/tutor/preview/${studio.course.id}`} target="_blank">Learner preview</a>
+              {studio.course.status === "published" && <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/copy`} method="post"><button class="button button-small button-secondary" type="submit">Create new version</button><p class="form-message"></p></form>}
+              {studio.course.status === "draft" && <form class="api-form" data-method="DELETE" data-confirm="Delete this draft course permanently?" action={`/api/tutor/courses/${studio.course.id}`} method="post"><button class="button button-small button-danger" type="submit">Delete draft</button><p class="form-message"></p></form>}
+              <a class="button button-small" href={studioUrl("publish")}>Review & publish</a>
+            </div>
           </article>
 
-          <article class="panel">
-            <span class="eyebrow">Booking and access</span><h2>Course offerings</h2>
+          {activeSection === "overview" && <article class="panel studio-overview">
+            <div class="studio-section-intro"><div><span class="eyebrow">Course overview</span><h2>Build with a clear next step.</h2><p>{studio.course.description}</p></div><span class:list={["studio-status", studio.course.status]}>{studio.course.status}</span></div>
+            <div class="studio-metric-grid">
+              <a href={studioUrl("curriculum")}><strong>{studio.modules.length}</strong><span>Modules</span><small>{studio.lessons.length} lessons</small></a>
+              <a href={studioUrl("assessments")}><strong>{studio.assessments.length}</strong><span>Assessments</span><small>{draftAssessmentCount} drafts</small></a>
+              <a href={studioUrl("offerings")}><strong>{studio.offerings.length}</strong><span>Offerings</span><small>{publishedOfferingCount} bookable</small></a>
+              <a href={studioUrl("learners")}><strong>{dashboard.creatorCourses?.find((course) => course.id === studio.course.id)?.enrolment_count ?? 0}</strong><span>Learners</span><small>{invitations.length} invitations</small></a>
+            </div>
+            <div class="studio-overview-columns">
+              <section><h3>Course details</h3><dl class="course-facts"><div><dt>Topic</dt><dd>{studio.course.subject}</dd></div><div><dt>Audience</dt><dd>{studio.course.primary_level}</dd></div><div><dt>Delivery</dt><dd>{studio.course.delivery_mode}</dd></div><div><dt>Base price</dt><dd>{new Intl.NumberFormat("en-SG", { style: "currency", currency: studio.course.currency }).format(studio.course.price_cents / 100)}</dd></div></dl></section>
+              <section><h3>Publication readiness</h3><div class="readiness-list">{readiness.map((item) => <div class:list={{ complete: item.complete }}><span>{item.complete ? "✓" : "○"}</span><p>{item.label}</p></div>)}</div><a class="text-link" href={studioUrl("publish")}>Open publish checklist</a></section>
+            </div>
+            <section class="course-cover-editor">
+              <div class="course-cover-preview">{studio.course.cover_asset_id ? <img src={`/api/media/${studio.course.cover_asset_id}`} alt={`${studio.course.title} cover`} /> : <span>{studio.course.subject.slice(0, 1)}</span>}</div>
+              <form class="stack-form" data-course-cover action={`/api/tutor/courses/${studio.course.id}/cover`}>
+                <div><h3>Course cover</h3><p>A strong 16:9 image makes your course easier to recognise in search and enrolment.</p></div>
+                <label>Cover image<input type="file" name="image" accept="image/jpeg,image/png,image/webp" required /></label>
+                <small>JPG, PNG or WebP. Maximum 5 MB.</small>
+                <button class="button button-small" type="submit">Upload cover</button><p class="form-message"></p>
+              </form>
+            </section>
+            <details class="studio-editor">
+              <summary>Edit course details</summary>
+              <form class="stack-form api-form" data-method="PATCH" action={`/api/tutor/courses/${studio.course.id}`} method="post">
+                <div class="form-columns">
+                  <label>Title<input name="title" required minlength="3" value={studio.course.title} /></label>
+                  <label>Topic<input name="subject" required value={studio.course.subject} /></label>
+                  <label>Audience<input name="primaryLevel" required value={studio.course.primary_level} /></label>
+                  <label>Primary delivery<select name="deliveryMode">
+                    <option value="self-paced" selected={studio.course.delivery_mode === "self-paced"}>Recorded / self-paced</option>
+                    <option value="live" selected={studio.course.delivery_mode === "live"}>Live online</option>
+                    <option value="hybrid" selected={studio.course.delivery_mode === "hybrid"}>Hybrid</option>
+                    <option value="ai-supported" selected={studio.course.delivery_mode === "ai-supported"}>AI-supported</option>
+                  </select></label>
+                </div>
+                <label>Description<textarea name="description" required minlength="20" rows="5">{studio.course.description}</textarea></label>
+                <button class="button button-small" type="submit">Save course changes</button><p class="form-message"></p>
+              </form>
+            </details>
+          </article>}
+
+          {activeSection === "offerings" && <article class="panel">
+            <span class="eyebrow">Pricing, products and access</span><h2>Priced learning offers</h2>
+            <p class="studio-description">Create the offer and set its price, add the products learners will receive, then publish it. Nothing becomes visible or purchasable to other users until the priced offer is published.</p>
             <form class="inline-form api-form" data-kind="offering" action={`/api/tutor/courses/${studio.course.id}/offerings`} method="post">
               <input name="title" required placeholder="Offering title" />
               <select name="offeringType"><option value="self_paced">Self-paced access</option><option value="cohort">Scheduled cohort</option><option value="event">Single event / seminar</option><option value="academic_term">Academic term</option></select>
               <select name="deliveryMode"><option value="recorded">Recorded</option><option value="live_online">Live online</option><option value="in_person">In person</option><option value="hybrid">Hybrid</option></select>
               <input name="academicYear" type="number" min="2000" max="2200" value={new Date().getFullYear()} placeholder="Year (terms only)" />
               <input name="termNumber" type="number" min="1" max="12" value="1" placeholder="Term (terms only)" />
-              <input name="priceSGD" type="number" min="0.50" step="0.01" placeholder="Price SGD" required />
+              <input name="priceSGD" type="number" min="0.50" step="0.01" placeholder="Creator tuition SGD" required />
               <input name="capacity" type="number" min="1" placeholder="Capacity (optional)" />
+              <input name="plannedMeetingMinutes" type="number" min="0" value="0" placeholder="Total live minutes" />
+              <input name="plannedMeetingParticipants" type="number" min="0" value="0" placeholder="Participants incl. hosts" />
+              <input name="plannedPaidLearners" type="number" min="1" value="1" placeholder="Planned paid learners" />
               <label>Starts<input name="startsAt" type="datetime-local" /></label><label>Ends<input name="endsAt" type="datetime-local" /></label>
-              <button class="button button-small" type="submit">Create offering</button><p class="form-message"></p>
+              <button class="button button-small" type="submit">Create draft offer</button><p class="form-message"></p>
             </form>
             <div class="term-grid studio-terms">{studio.offerings.map((offering) => (
               <section class:list={["term-card", { active: offering.id === selectedOfferingId }]}>
-                <a href={`/tutor?courseId=${studio.course.id}&offeringId=${offering.id}`}><span>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{new Intl.NumberFormat("en-SG", { style: "currency", currency: offering.currency }).format(offering.price_cents / 100)}</strong><small>{offering.status} · {offering.pricing_status}{offering.capacity ? ` · ${offering.capacity} places` : ""}</small></a>
-                {offering.status !== "published" && <form class="api-form publish-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="text-link" type="submit">Publish offering & Stripe price</button><p class="form-message"></p></form>}
+                 <a href={studioUrl("offerings", offering.id)}><span>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{new Intl.NumberFormat("en-SG", { style: "currency", currency: offering.currency }).format(offering.price_cents / 100)}</strong><small>Tuition {(offering.creator_price_cents / 100).toFixed(2)} + platform {(offering.platform_fixed_fee_cents / 100).toFixed(2)} + service {(offering.service_fee_cents / 100).toFixed(2)}{offering.planned_meeting_cost_cents ? ` + planned meeting allocation` : ""}</small><small>{offering.status} · {offering.pricing_status}{offering.capacity ? ` · ${offering.capacity} places` : ""}</small></a>
+                {offering.status !== "published" && <form class="api-form publish-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="text-link" type="submit">Set Stripe price & publish offer</button><p class="form-message"></p></form>}
               </section>
             ))}</div>
             {selectedOffering && <p class="form-success">Authoring content and sessions for <strong>{selectedOffering.title}</strong>.</p>}
-          </article>
+           </article>}
 
-          {selectedOffering && <article class="panel">
+          {activeSection === "learners" && <article class="panel">
+            <span class="eyebrow">Course roster</span><h2>Learners and progress</h2>
+            {!studio.learners.length ? <p class="form-message">Learners will appear after their booking is confirmed.</p> : <div class="studio-roster">{studio.learners.map((learner) => <div><span class="tutor-avatar">{learner.display_name.slice(0, 1)}</span><span><strong>{learner.display_name}</strong><small>{learner.email} · {learner.offering_title}</small></span><span class="roster-progress"><strong>{learner.progress_percent}%</strong><small>{learner.status}</small></span></div>)}</div>}
+            <hr class="studio-divider" />
+            <span class="eyebrow">Reach learners</span><h2>Course invitations</h2>
+            <p>Invite learners to a specific published offering. Each recipient receives a private, expiring registration link.</p>
+            <form class="stack-form api-form invitation-form" data-kind="invitation" action={`/api/tutor/courses/${studio.course.id}/invitations`} method="post">
+              <label>Course offering<select name="offeringId" required>
+                <option value="">Choose a published offering</option>
+                {studio.offerings.filter((offering) => offering.status === "published" && offering.pricing_status === "ready").map((offering) => (
+                  <option value={offering.id} selected={offering.id === selectedOfferingId}>{offering.title}</option>
+                ))}
+              </select></label>
+              <label>Learner emails<textarea name="recipients" required rows="3" placeholder="learner@example.com&#10;guardian@example.com"></textarea><small>Up to 20 addresses, separated by commas or new lines.</small></label>
+              <label>Personal message<textarea name="personalMessage" maxlength="500" rows="3" placeholder="Optional note for your learners"></textarea></label>
+              <label>Invitation expires<select name="expiresInDays"><option value="7">7 days</option><option value="14" selected>14 days</option><option value="30">30 days</option></select></label>
+              <button class="button button-small" type="submit">Send invitations</button><p class="form-message" aria-live="polite"></p>
+            </form>
+            <div class="studio-items invitation-list">{invitations.map((invitation) => (
+              <section>
+                <div><h3>{invitation.recipient_email}</h3><small>{invitation.offering_title}</small></div>
+                <span class:list={["invitation-status", invitation.status]}>{invitation.status} · email {invitation.delivery_status}</span>
+                <small>Sent {new Date(invitation.created_at).toLocaleString("en-SG")} · expires {new Date(invitation.expires_at).toLocaleDateString("en-SG")}</small>
+              </section>
+            ))}</div>
+            {!invitations.length && <p class="form-message">No learner invitations have been sent for this course.</p>}
+          </article>}
+
+          {activeSection === "results" && <article class="panel">
+            <div class="studio-section-intro"><div><span class="eyebrow">Assessment reporting</span><h2>Results and attempts</h2><p>Review performance across quizzes, tests and mock exams. Learners retain their own attempt history separately.</p></div><a class="button button-small button-secondary" href="/my-results">View my learner results</a></div>
+            <div class="studio-metric-grid">{resultSummary.map((result) => <section><strong>{result.average_score ?? "—"}{result.average_score !== null ? "%" : ""}</strong><span>{result.title}</span><small>{result.attempt_count} attempts · {result.passed_count} passed{result.grading_count ? ` · ${result.grading_count} awaiting grading` : ""}</small></section>)}</div>
+            {!resultSummary.length && <p class="form-message">Create and publish an assessment to begin collecting results.</p>}
+            {resultAttempts.length > 0 && <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Learner</th><th>Assessment</th><th>Submitted</th><th>Status</th><th>Score</th></tr></thead><tbody>{resultAttempts.map((attempt) => <tr><td><strong>{attempt.learner_name}</strong><small>{attempt.learner_email}</small></td><td>{attempt.assessment_title}<small>{attempt.assessment_type.replace("_", " ")}</small></td><td>{attempt.submitted_at ? new Date(attempt.submitted_at).toLocaleString("en-SG") : "In progress"}</td><td>{attempt.status}</td><td>{attempt.score === null ? "—" : `${attempt.score}%${attempt.passed ? " · Passed" : ""}`}</td></tr>)}</tbody></table></div>}
+          </article>}
+
+          {activeSection === "team" && <article class="panel">
+            <span class="eyebrow">Delegated access</span><h2>Course team</h2>
+            <p class="studio-description">Invite a co-host, content editor, facilitator or course manager. Access starts only after the recipient signs in with the invited email and accepts.</p>
+            {["owner", "administrator", "platform_admin"].includes(courseRole || studio.course.member_role) && <form class="stack-form api-form" data-kind="team-invitation" action={`/api/tutor/courses/${studio.course.id}/team-invitations`} method="post">
+              <label>Email address<input name="email" type="email" required placeholder="collaborator@example.com" /></label>
+              <label>Course role<select name="memberRole"><option value="instructor">Co-host</option><option value="editor">Content editor</option><option value="facilitator">Facilitator</option><option value="administrator">Course manager</option></select></label>
+              <label>Personal message<textarea name="personalMessage" maxlength="500" rows="2" placeholder="Optional note about how you would like to work together"></textarea></label>
+              <p class="role-help">Co-hosts manage assigned classes. Editors can work on draft course content. Facilitators support delivery. Course managers can manage the course team and operations.</p>
+              <button class="button button-small" type="submit">Send collaboration invitation</button><p class="form-message"></p>
+            </form>}
+            {teamInvitations.length > 0 && <div class="team-invitation-list">{teamInvitations.map((invitation) => <section><div><strong>{invitation.email}</strong><small>{invitation.member_role.replace("instructor", "co-host")} · {invitation.status} · email {invitation.delivery_status}</small></div><small>Expires {new Date(invitation.expires_at).toLocaleDateString("en-SG")}</small></section>)}</div>}
+            <div class="team-list">{team.map((member) => <section><span class="tutor-avatar">{member.display_name.slice(0, 1)}</span><div><strong>{member.display_name}</strong><small>{member.email} · {member.member_role} · {member.status}</small></div>{member.member_role !== "owner" && member.status === "active" && ["owner", "administrator", "platform_admin"].includes(courseRole || studio.course.member_role) && <form class="api-form" data-method="DELETE" action={`/api/tutor/courses/${studio.course.id}/team/${member.user_id}`} method="post"><button class="text-link danger-link" type="submit">Remove access</button><p class="form-message"></p></form>}</section>)}</div>
+          </article>}
+
+          {activeSection === "sessions" && !selectedOffering && <article class="panel empty-state"><span class="eyebrow">Sessions</span><h2>Create an offering first</h2><p>Live and in-person sessions belong to a specific course offering.</p><a class="button" href={studioUrl("offerings")}>Open offerings</a></article>}
+          {activeSection === "sessions" && selectedOffering && <article class="panel">
             <span class="eyebrow">Scheduled delivery</span><h2>Live and in-person sessions</h2>
             <form class="inline-form api-form" data-kind="session" action={`/api/tutor/offerings/${selectedOffering.id}/sessions`} method="post">
               <input name="title" required placeholder="Session title" />
               <select name="deliveryMode"><option value="live_online">Live online</option><option value="in_person">In person</option></select>
               <label>Starts<input name="startsAt" type="datetime-local" required /></label><label>Ends<input name="endsAt" type="datetime-local" required /></label>
               <input name="capacity" type="number" min="1" placeholder="Capacity" />
-              <input name="meetingUrl" type="url" placeholder="HTTPS meeting URL (online)" />
-              <input name="meetingProvider" placeholder="Zoom, Teams…" />
+              <p class="form-message">Online sessions create a restricted Google Meet from the course owner's connected Google Calendar.</p>
+              <select name="instructorId" aria-label="Assigned instructor"><option value={dashboard.user.id}>Me</option>{team.filter((member) => member.user_id !== dashboard.user.id && member.status === "active" && ["owner", "administrator", "instructor", "facilitator"].includes(member.member_role)).map((member) => <option value={member.user_id}>{member.display_name} · {member.member_role}</option>)}</select>
               <input name="venueName" placeholder="Venue name (in person)" />
               <input name="venueAddress" placeholder="Venue address (in person)" />
               <input name="arrivalInstructions" placeholder="Arrival instructions" />
               <button class="button button-small" type="submit">Add session</button><p class="form-message"></p>
             </form>
-            <div class="studio-items">{studio.sessions.filter((session) => session.course_offering_id === selectedOffering.id).map((session) => <section><h3>{session.title}</h3><small>{session.delivery_mode.replace("_", " ")} · {new Date(session.starts_at).toLocaleString("en-SG")}{session.venue_name ? ` · ${session.venue_name}` : ""}</small></section>)}</div>
+            <div class="studio-items">{studio.sessions.filter((session) => session.course_offering_id === selectedOffering.id).map((session) => <section><h3>{session.title}</h3><small>{session.delivery_mode.replace("_", " ")} · {new Date(session.starts_at).toLocaleString("en-SG")}{session.instructor_name ? ` · ${session.instructor_name}` : ""}{session.venue_name ? ` · ${session.venue_name}` : ""}</small>{session.delivery_mode === "live_online" && <span class="studio-status complete">Google Meet created</span>}</section>)}</div>
           </article>}
 
-          <article class="panel">
+          {activeSection === "curriculum" && <article class="panel">
             <span class="eyebrow">Curriculum</span><h2>Modules and lessons</h2>
             <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/modules`} method="post">
               <input type="hidden" name="offeringId" value={selectedOfferingId} />
@@ -141,47 +371,145 @@ const selectedOffering = studio?.offerings.find((offering) => offering.id === se
                 <section>
                   <h3>{module.position}. {module.title}</h3>
                   <ul>{studio.lessons.filter((lesson) => lesson.module_id === module.id).map((lesson) => <li>{lesson.title} <small>{lesson.lesson_type}</small></li>)}</ul>
-                  <form class="inline-form api-form" action={`/api/tutor/modules/${module.id}/lessons`} method="post">
+                  <form class="inline-form api-form" data-kind="lesson" action={`/api/tutor/modules/${module.id}/lessons`} method="post">
                     <input name="title" required placeholder="Lesson title" />
                     <select name="lessonType"><option value="video">Video</option><option value="text">Text</option><option value="document">Document</option><option value="quiz">Quiz</option><option value="live">Live</option><option value="ai">AI-supported</option></select>
                     <select name="deliveryMode"><option value="recorded">Recorded / self-paced</option><option value="live_online">Live online</option><option value="in_person">In person</option></select>
                     <select name="sessionId"><option value="">No scheduled session</option>{studio.sessions.filter((session) => session.course_offering_id === selectedOfferingId).map((session) => <option value={session.id}>{session.title}</option>)}</select>
+                    <input name="summary" placeholder="Lesson summary" />
+                    <input name="videoUrl" type="url" placeholder="Direct HTTPS video URL (video lessons)" />
+                    <input name="estimatedMinutes" type="number" min="1" placeholder="Minutes" />
                     <input name="position" type="number" min="1" value={studio.lessons.filter((lesson) => lesson.module_id === module.id).length + 1} />
                     <button class="button button-small" type="submit">Add lesson</button><p class="form-message"></p>
                   </form>
                 </section>
               ))}
             </div>
-          </article>
+          </article>}
 
-          <article class="panel">
+          {activeSection === "assessments" && <article class="panel">
             <span class="eyebrow">Knowledge checks</span><h2>Quizzes, tests and mock exams</h2>
-            <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/assessments`} method="post">
+            <form class="inline-form api-form" data-kind="assessment" action={`/api/tutor/courses/${studio.course.id}/assessments`} method="post">
               <input type="hidden" name="offeringId" value={selectedOfferingId} />
               <input name="title" required placeholder="Assessment title" />
-              <select name="assessmentType"><option value="quiz">Quiz</option><option value="test">Test</option><option value="mock_exam">Mock exam</option></select>
-              <input name="passingScore" type="number" min="0" max="100" value="50" />
+              <select name="assessmentType" class="assessment-type"><option value="quiz">Quiz</option><option value="test">Test</option><option value="mock_exam">Mock exam</option></select>
+              <label>Time limit (minutes)<input name="timeLimitMinutes" type="number" min="1" value="10" /></label>
+              <label>Attempts<input name="attemptLimit" type="number" min="1" value="3" /></label>
+              <label>Pass mark %<input name="passingScore" type="number" min="0" max="100" value="50" /></label>
+              <label>Feedback<select name="feedbackMode"><option value="immediate">Immediately</option><option value="after_submission">After submission</option><option value="after_close">After assessment closes</option></select></label>
               <button class="button button-small" type="submit">Create draft</button><p class="form-message"></p>
             </form>
-            <div class="studio-items">{studio.assessments.map((assessment) => (
-              <details>
-                <summary>{assessment.title} <small>{assessment.assessment_type} · {assessment.status}</small></summary>
-                {assessment.status === "draft" && <>
+            <div class="studio-items">{studio.assessments.map((assessment) => {
+              const questions = studio.assessmentQuestions.filter((question) => question.assessment_id === assessment.id);
+              const editable = assessment.status === "draft";
+              return <details data-assessment-id={assessment.id}>
+                <summary>{assessment.title} <small>{assessment.assessment_type.replace("_", " ")} · {assessment.status} · v{assessment.version} · {questions.length} questions</small></summary>
+                {editable ? <form class="stack-form api-form" data-kind="assessment" data-method="PATCH" action={`/api/tutor/assessments/${assessment.id}`} method="post">
+                  <div class="form-columns">
+                    <label>Title<input name="title" required value={assessment.title} /></label>
+                    <label>Type<select name="assessmentType" class="assessment-type">
+                      <option value="quiz" selected={assessment.assessment_type === "quiz"}>Quiz</option>
+                      <option value="test" selected={assessment.assessment_type === "test"}>Test</option>
+                      <option value="mock_exam" selected={assessment.assessment_type === "mock_exam"}>Mock exam</option>
+                    </select></label>
+                    <label>Time limit (minutes)<input name="timeLimitMinutes" type="number" min="1" value={Math.max(1, Math.round((assessment.time_limit_seconds ?? 600) / 60))} /></label>
+                    <label>Attempts<input name="attemptLimit" type="number" min="1" value={assessment.attempt_limit ?? 1} /></label>
+                    <label>Pass mark %<input name="passingScore" type="number" min="0" max="100" value={assessment.passing_score} /></label>
+                    <label>Feedback<select name="feedbackMode">
+                      <option value="immediate" selected={assessment.feedback_mode === "immediate"}>Immediately</option>
+                      <option value="after_submission" selected={assessment.feedback_mode === "after_submission"}>After submission</option>
+                      <option value="after_close" selected={assessment.feedback_mode === "after_close"}>After assessment closes</option>
+                    </select></label>
+                  </div>
+                  <label>Instructions<textarea name="instructions" rows="3">{assessment.instructions}</textarea></label>
+                  <button class="button button-small button-secondary" type="submit">Save assessment settings</button><p class="form-message"></p>
+                </form> : <div class="published-editor-lock"><div><strong>Published version is read-only</strong><p>Create a new draft version to change settings, questions or answers without affecting learner attempts.</p></div><form class="api-form" action={`/api/tutor/assessments/${assessment.id}/copy`} method="post"><button class="button button-small button-secondary" type="submit">Create draft version</button><p class="form-message"></p></form></div>}
+                <div class="assessment-question-list" data-assessment-id={assessment.id}>
+                {questions.map((question, questionIndex) => {
+                  const options = studio.assessmentOptions.filter((option) => option.question_id === question.id);
+                  const media = studio.assessmentQuestionMedia.find((entry) => entry.question_id === question.id);
+                  const mediaItem = media ? assessmentMediaItems.find((item) => item.id === media.library_item_id) : undefined;
+                  const correctIndex = Math.max(0, options.findIndex((option) => Boolean(option.is_correct)));
+                  return <details class="studio-editor assessment-question-item" data-question-id={question.id}>
+                    <summary>Question {questionIndex + 1}: {question.prompt} <small>{question.question_type.replace("_", " ")} · {question.points} {question.points === 1 ? "point" : "points"}</small></summary>
+                    {editable ? <>
+                    <form class="stack-form api-form question-edit-form" data-kind="question" data-method="PATCH" action={`/api/tutor/assessment-questions/${question.id}`} method="post">
+                      <label>Question<input name="prompt" required value={question.prompt} /></label>
+                      <div class="form-columns">
+                        <label>Answer format<select name="questionType" class="question-type-select">
+                          <option value="multiple_choice" selected={question.question_type === "multiple_choice"}>Multiple choice</option>
+                          <option value="true_false" selected={question.question_type === "true_false"}>True or false</option>
+                          <option value="short_text" selected={question.question_type === "short_text"}>Written response</option>
+                        </select></label>
+                        <label>Points<input name="points" type="number" min="1" value={question.points} /></label>
+                      </div>
+                      <fieldset class="question-media-editor">
+                        <legend>Optional image, video or audio</legend>
+                        <label>Media from Content Library<select name="mediaLibraryItemId">
+                          <option value="">No media</option>
+                          {assessmentMediaItems.map((item) => <option value={item.id} selected={media?.library_item_id === item.id}>{item.title} · {item.mediaType}</option>)}
+                        </select></label>
+                        <label>Image description <small>Required when an image is selected</small><input name="mediaAltText" value={media?.alt_text ?? ""} placeholder="Describe what learners need to see" /></label>
+                        <label>Caption or transcript <small>Optional; useful for video and audio accessibility</small><textarea name="mediaCaption" rows="2">{media?.caption ?? ""}</textarea></label>
+                      </fieldset>
+                      <div class="choice-fields" data-choice-fields>
+                        <div class="option-editor">
+                          {[0, 1, 2, 3].map((index) => <label data-option-index={index}>Option {String.fromCharCode(65 + index)}<input name={`option${String.fromCharCode(65 + index)}`} required={index < 2} value={options[index]?.label ?? ""} /></label>)}
+                        </div>
+                        <label>Correct answer<select name="correct">{[0, 1, 2, 3].map((index) => <option value={index} selected={correctIndex === index}>{String.fromCharCode(65 + index)}</option>)}</select></label>
+                      </div>
+                      <label>Explanation<textarea name="explanation" rows="2">{question.explanation}</textarea></label>
+                      <button class="button button-small button-secondary" type="submit">Save question</button><p class="form-message"></p>
+                    </form>
+                    <div class="question-row-actions">
+                      <button class="text-link move-question" type="button" data-direction="up" disabled={questionIndex === 0}>Move up</button>
+                      <button class="text-link move-question" type="button" data-direction="down" disabled={questionIndex === questions.length - 1}>Move down</button>
+                      <form class="api-form" data-method="DELETE" data-confirm="Delete this question? This cannot be undone." action={`/api/tutor/assessment-questions/${question.id}`} method="post"><button class="text-link danger-link" type="submit">Delete question</button><p class="form-message"></p></form>
+                    </div></> : <div class="published-question-preview">
+                      {media && mediaItem?.contentUrl && <figure class="question-media">
+                        {media.media_type === "image" && <img src={mediaItem.contentUrl} alt={media.alt_text} loading="lazy" />}
+                        {media.media_type === "video" && <video src={mediaItem.contentUrl} controls preload="metadata"></video>}
+                        {media.media_type === "audio" && <audio src={mediaItem.contentUrl} controls preload="metadata"></audio>}
+                        {media.caption && <figcaption>{media.caption}</figcaption>}
+                      </figure>}
+                      {question.question_type === "short_text" ? <p>Written response</p> : <ol>{options.map((option) => <li>{option.label}</li>)}</ol>}
+                    </div>}
+                  </details>;
+                })}
+                </div>
+                {editable && <>
                   <form class="stack-form api-form" data-kind="question" action={`/api/tutor/assessments/${assessment.id}/questions`} method="post">
                     <label>Question<input name="prompt" required /></label>
-                    <div class="option-editor">
-                      <label>Option A<input name="optionA" required /></label><label>Option B<input name="optionB" required /></label>
-                      <label>Option C<input name="optionC" /></label><label>Option D<input name="optionD" /></label>
+                    <div class="form-columns">
+                      <label>Answer format<select name="questionType" class="question-type-select"><option value="multiple_choice">Multiple choice</option><option value="true_false">True or false</option><option value="short_text">Written response</option></select></label>
+                      <label>Points<input name="points" type="number" min="1" value="1" /></label>
                     </div>
-                    <label>Correct answer<select name="correct"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
+                    <fieldset class="question-media-editor">
+                      <legend>Optional image, video or audio</legend>
+                      <label>Media from Content Library<select name="mediaLibraryItemId">
+                        <option value="">No media</option>
+                        {assessmentMediaItems.map((item) => <option value={item.id}>{item.title} · {item.mediaType}</option>)}
+                      </select></label>
+                      <label>Image description <small>Required when an image is selected</small><input name="mediaAltText" placeholder="Describe what learners need to see" /></label>
+                      <label>Caption or transcript <small>Optional; useful for video and audio accessibility</small><textarea name="mediaCaption" rows="2"></textarea></label>
+                    </fieldset>
+                    <div class="choice-fields" data-choice-fields>
+                      <div class="option-editor">
+                        <label data-option-index="0">Option A<input name="optionA" required /></label><label data-option-index="1">Option B<input name="optionB" required /></label>
+                        <label data-option-index="2">Option C<input name="optionC" /></label><label data-option-index="3">Option D<input name="optionD" /></label>
+                      </div>
+                      <label>Correct answer<select name="correct"><option value="0">A</option><option value="1">B</option><option value="2">C</option><option value="3">D</option></select></label>
+                    </div>
+                    <label>Explanation <small>Shown after marking according to the feedback setting</small><textarea name="explanation" rows="2"></textarea></label>
                     <button class="button button-small" type="submit">Add question</button><p class="form-message"></p>
                   </form>
                   <form class="api-form publish-form" action={`/api/tutor/assessments/${assessment.id}/publish`} method="post"><button class="text-link" type="submit">Publish assessment</button><p class="form-message"></p></form>
                 </>}
-              </details>
-            ))}</div>
-          </article>
+              </details>;
+            })}</div>
+          </article>}
 
+          {activeSection === "resources" && <>
           <article class="panel">
             <span class="eyebrow">Recall practice</span><h2>Flashcards</h2>
             <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/flashcard-decks`} method="post">
@@ -204,30 +532,70 @@ const selectedOffering = studio?.offerings.find((offering) => offering.id === se
           </article>
 
           <article class="panel">
-            <span class="eyebrow">Resources</span><h2>Course materials</h2>
+            <span class="eyebrow">Resources</span><h2>Ebooks, videos and course materials</h2>
+            <p class="studio-description">Add an ebook or PDF reader link, a video, a web resource, or a downloadable file. Resources can then be assigned to an offering.</p>
             <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/materials`} method="post">
               <input type="hidden" name="offeringId" value={selectedOfferingId} />
               <input name="title" required placeholder="Material title" />
-              <select name="materialType"><option value="document">Document</option><option value="video">Video</option><option value="link">External link</option><option value="download">Download</option></select>
+              <select name="contentKind" aria-label="Learning content type"><option value="resource">General resource</option><option value="ebook">Ebook</option><option value="reading">Reading material</option><option value="video">Video content</option><option value="audio">Audio content</option></select>
+              <select name="resourceKind" aria-label="Resource kind"><option value="resource">General resource</option><option value="ebook">Ebook</option><option value="worksheet">Worksheet</option><option value="slides">Slides</option><option value="reference">Reference</option></select>
+              <select name="materialType" aria-label="Resource format"><option value="document">Document / PDF</option><option value="video">Video</option><option value="link">External link</option><option value="download">Download</option></select>
               <input name="externalUrl" type="url" required placeholder="https://…" />
               <input name="description" placeholder="Description" />
               <button class="button button-small" type="submit">Add material</button><p class="form-message"></p>
             </form>
-            <div class="studio-items">{studio.materials.map((material) => <section><h3>{material.title}</h3><small>{material.material_type} · {material.status}</small></section>)}</div>
+            <div class="studio-items">{studio.materials.map((material) => <section><h3>{material.title}</h3><small>{material.content_kind} · {material.material_type} · {material.status}</small></section>)}</div>
           </article>
 
           {selectedOfferingId && <article class="panel">
-            <span class="eyebrow">Reuse content</span><h2>Assign existing content to this offering</h2>
-            <form class="inline-form api-form" data-kind="assignment" action={`/api/tutor/offerings/${selectedOfferingId}/content`} method="post">
+            <span class="eyebrow">Bundle products</span><h2>Build this priced offer from existing content</h2>
+            <p class="studio-description">Attach course modules and materials or reuse a published product. A product is discoverable by other users only when this offer has a valid price and is published. Published bundles are locked; create a new draft offer to change them.</p>
+            {selectedOffering?.status === "draft" && <form class="inline-form api-form" data-kind="assignment" action={`/api/tutor/offerings/${selectedOfferingId}/content`} method="post">
               <select name="contentSelection" required>
                 <option value="">Choose content</option>
                 {studio.modules.map((item) => <option value={`module|${item.id}`}>Module · {item.title}</option>)}
                 {studio.materials.map((item) => <option value={`material|${item.id}`}>Material · {item.title}</option>)}
                 {studio.assessments.map((item) => <option value={`assessment|${item.id}`}>Assessment · {item.title}</option>)}
                 {studio.flashcardDecks.map((item) => <option value={`flashcard_deck|${item.id}`}>Flashcards · {item.title}</option>)}
+                {studio.learningProducts.map((item) => <option value={`learning_product|${item.id}`} disabled={selectedLearningProductIds.has(item.id)}>Library {learningProductMeta[item.product_type].label} · {item.title}{selectedLearningProductIds.has(item.id) ? " (included)" : ""}</option>)}
               </select>
               <button class="button button-small" type="submit">Assign to offering</button><p class="form-message"></p>
-            </form>
+            </form>}
+            <div class="offering-product-list">
+              {[...selectedLearningProductIds].map((productId) => {
+                const item = studio.learningProducts.find((product) => product.id === productId);
+                if (!item) return null;
+                const meta = learningProductMeta[item.product_type];
+                return <section>
+                  <span class="product-symbol">{meta.symbol}</span>
+                  <div><strong>{item.title}</strong><small>{meta.label} · {item.estimated_minutes ?? "—"} min · available through this offer</small></div>
+                  <a class="text-link" href={`/library/${item.slug}`} target="_blank">Preview</a>
+                  {selectedOffering?.status === "draft" && <form class="api-form" data-method="DELETE" action={`/api/tutor/offerings/${selectedOfferingId}/learning-products/${item.id}`} method="post">
+                    <button class="text-link danger-link" type="submit">Remove</button><p class="form-message"></p>
+                  </form>}
+                </section>;
+              })}
+            </div>
+            {!selectedLearningProductIds.size && <p class="form-message">No products are included in this offer yet.</p>}
+            {!studio.learningProducts.length && <p class="form-message">Publish a standalone product in the <a class="text-link" href="/create">creator hub</a>, then return here to include it.</p>}
+          </article>}
+          </>}
+
+          {activeSection === "publish" && <article class="panel publish-checklist">
+            <div class="studio-section-intro"><div><span class="eyebrow">Review and publish</span><h2>Prepare the learner experience.</h2><p>Complete the essentials, preview the public course, then publish the course and its bookable offerings.</p></div><strong>{readinessComplete}/{readiness.length}</strong></div>
+            <div class="readiness-list readiness-large">{readiness.map((item) => <div class:list={{ complete: item.complete }}><span>{item.complete ? "✓" : "○"}</span><p>{item.label}</p></div>)}</div>
+            <div class="publish-actions">
+              <a class="button button-secondary" href={`/tutor/preview/${studio.course.id}`} target="_blank">Preview learner experience</a>
+              {studio.course.status !== "published"
+                ? <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/publish`} method="post"><button class="button" type="submit">Publish course & open enrolment</button><p class="form-message"></p></form>
+                : publishedOfferingCount === 0
+                  ? studio.offerings.length === 0
+                    ? <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/publish`} method="post"><button class="button" type="submit">Set up enrolment</button><p class="form-message">This course is published, but learners cannot enrol until an offering is ready.</p></form>
+                    : <p class="form-message">This course is published, but learners cannot enrol. Publish one of the offerings below.</p>
+                  : <p class="form-success">This course is published and open for enrolment.</p>}
+            </div>
+            <section class="publish-offerings"><h3>Offerings</h3>{studio.offerings.map((offering) => <div><span><strong>{offering.title}</strong><small>{offering.status} · pricing {offering.pricing_status}</small></span>{offering.status !== "published" ? <form class="api-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="button button-small" type="submit">Publish offering</button><p class="form-message"></p></form> : <span class="studio-status published">Published</span>}</div>)}</section>
+            {studio.course.status === "published" && <section class="listing-controls"><span class="eyebrow">Publication visibility</span><h3>{studio.course.listing_status === "listed" ? "This course is published and discoverable." : "This course is unpublished."}</h3><p>{studio.course.listing_status === "listed" ? "Unpublishing stops new bookings while preserving existing learner access, results and records." : studio.course.delisted_reason ?? "Existing learners continue to have access."}</p>{studio.course.listing_status === "listed" ? <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/delist`} method="post"><input name="reason" required minlength="3" placeholder="Reason for unpublishing" /><button class="button button-small button-danger" type="submit">Unpublish course</button><p class="form-message"></p></form> : <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/relist`} method="post"><button class="button button-small" type="submit">Republish course</button><p class="form-message"></p></form>}</section>}
           </article>}
         </>
       )}
@@ -237,6 +605,7 @@ const selectedOffering = studio?.offerings.find((offering) => offering.id === se
     document.querySelectorAll<HTMLFormElement>(".api-form").forEach((form) => {
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
+        if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
         const message = form.querySelector<HTMLElement>(".form-message");
         const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
         if (button) button.disabled = true;
@@ -247,7 +616,7 @@ const selectedOffering = studio?.offerings.find((offering) => offering.id === se
           body = {
             ...values,
             categorySlugs: values.categorySlug ? [String(values.categorySlug)] : [],
-            priceCents: Math.round(Number(values.priceSGD) * 100),
+            priceCents: values.priceSGD ? Math.round(Number(values.priceSGD) * 100) : 50,
             currency: "SGD",
             publish: false
           };
@@ -260,6 +629,9 @@ const selectedOffering = studio?.offerings.find((offering) => offering.id === se
             academicYear: Number(values.academicYear),
             termNumber: Number(values.termNumber),
             capacity: values.capacity ? Number(values.capacity) : null,
+            plannedMeetingMinutes: Number(values.plannedMeetingMinutes ?? 0),
+            plannedMeetingParticipants: Number(values.plannedMeetingParticipants ?? 0),
+            plannedPaidLearners: Number(values.plannedPaidLearners ?? 1),
             priceCents: Math.round(Number(values.priceSGD) * 100),
             startsAt: values.startsAt ? new Date(String(values.startsAt)).toISOString() : null,
             endsAt: values.endsAt ? new Date(String(values.endsAt)).toISOString() : null,
@@ -276,14 +648,45 @@ const selectedOffering = studio?.offerings.find((offering) => offering.id === se
             timezone: "Asia/Singapore"
           };
         }
+        if (form.dataset.kind === "lesson") {
+          body = {
+            ...values,
+            estimatedMinutes: values.estimatedMinutes ? Number(values.estimatedMinutes) : null,
+            content: { summary: values.summary, videoUrl: values.videoUrl }
+          };
+          delete body.summary;
+          delete body.videoUrl;
+        }
+        if (form.dataset.kind === "assessment") {
+          body = {
+            ...values,
+            timeLimitSeconds: Number(values.timeLimitMinutes) * 60,
+            attemptLimit: Number(values.attemptLimit),
+            passingScore: Number(values.passingScore)
+          };
+          delete body.timeLimitMinutes;
+        }
         if (form.dataset.kind === "assignment") {
           const [kind, contentId] = String(values.contentSelection ?? "").split("|");
           body = { kind, contentId };
         }
+        if (form.dataset.kind === "invitation") {
+          body = {
+            ...values,
+            recipients: String(values.recipients ?? "").split(/[\n,;]+/).map((value) => value.trim()).filter(Boolean),
+            expiresInDays: Number(values.expiresInDays)
+          };
+        }
         if (form.dataset.kind === "question") {
           const correct = Number(values.correct);
           body = {
-            prompt: values.prompt, questionType: "multiple_choice", points: 1,
+            prompt: values.prompt,
+            explanation: values.explanation ?? "",
+            questionType: values.questionType ?? "multiple_choice",
+            points: Number(values.points ?? 1),
+            mediaLibraryItemId: values.mediaLibraryItemId ?? "",
+            mediaAltText: values.mediaAltText ?? "",
+            mediaCaption: values.mediaCaption ?? "",
             options: [values.optionA, values.optionB, values.optionC, values.optionD]
               .map((label, index) => ({ label, isCorrect: index === correct }))
               .filter((option) => typeof option.label === "string" && option.label.trim())
@@ -292,7 +695,7 @@ const selectedOffering = studio?.offerings.find((offering) => offering.id === se
         if ("position" in body) body.position = Number(body.position);
         if ("passingScore" in body) body.passingScore = Number(body.passingScore);
         const response = await fetch(form.action, {
-          method: form.method.toUpperCase(),
+          method: form.dataset.method ?? form.method.toUpperCase(),
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body)
         });
@@ -307,12 +710,122 @@ const selectedOffering = studio?.offerings.find((offering) => offering.id === se
           return;
         }
         if (message) { message.className = "form-success"; message.textContent = "Saved."; }
+        const method = (form.dataset.method ?? form.method.toUpperCase()).toUpperCase();
+        if (method === "PATCH") {
+          if (button) button.disabled = false;
+          return;
+        }
         const currentUrl = new URL(location.href);
         const courseId = result.course?.id ?? result.offering?.courseId ?? currentUrl.searchParams.get("courseId");
         const offeringId = result.offering?.id ?? currentUrl.searchParams.get("offeringId");
+        const section = currentUrl.searchParams.get("section");
         location.href = courseId
-          ? `/tutor?courseId=${encodeURIComponent(courseId)}${offeringId ? `&offeringId=${encodeURIComponent(offeringId)}` : ""}`
+          ? `/tutor?courseId=${encodeURIComponent(courseId)}${section ? `&section=${encodeURIComponent(section)}` : ""}${offeringId ? `&offeringId=${encodeURIComponent(offeringId)}` : ""}`
           : "/tutor";
+      });
+    });
+    document.querySelectorAll(".assessment-type").forEach((element) => {
+      const select = element as unknown as HTMLSelectElement;
+      select.addEventListener("change", () => {
+        const form = select.closest<HTMLFormElement>("form");
+        if (!form) return;
+        const time = form.elements.namedItem("timeLimitMinutes") as HTMLInputElement | null;
+        const attempts = form.elements.namedItem("attemptLimit") as HTMLInputElement | null;
+        const feedback = form.elements.namedItem("feedbackMode") as HTMLSelectElement | null;
+        const presets: Record<string, { time: number; attempts: number; feedback: string }> = {
+          quiz: { time: 10, attempts: 3, feedback: "immediate" },
+          test: { time: 45, attempts: 1, feedback: "after_submission" },
+          mock_exam: { time: 120, attempts: 1, feedback: "after_close" }
+        };
+        const preset = presets[select.value];
+        if (!preset) return;
+        if (time) time.value = String(preset.time);
+        if (attempts) attempts.value = String(preset.attempts);
+        if (feedback) feedback.value = preset.feedback;
+      });
+    });
+    const syncQuestionType = (select: HTMLSelectElement) => {
+      const form = select.closest<HTMLFormElement>("form");
+      const fields = form?.querySelector<HTMLElement>("[data-choice-fields]");
+      if (!form || !fields) return;
+      const isWritten = select.value === "short_text";
+      const isTrueFalse = select.value === "true_false";
+      fields.hidden = isWritten;
+      const correct = form.elements.namedItem("correct") as HTMLSelectElement | null;
+      fields.querySelectorAll<HTMLElement>("[data-option-index]").forEach((label) => {
+        const index = Number(label.dataset.optionIndex);
+        const input = label.querySelector<HTMLInputElement>("input");
+        const unavailable = isWritten || (isTrueFalse && index > 1);
+        label.hidden = !isWritten && isTrueFalse && index > 1;
+        if (input) {
+          input.disabled = unavailable;
+          input.required = !isWritten && index < 2;
+          if (isTrueFalse && index === 0) input.value = "True";
+          if (isTrueFalse && index === 1) input.value = "False";
+        }
+      });
+      if (correct) {
+        correct.disabled = isWritten;
+        [...correct.options].forEach((option, index) => { option.disabled = isTrueFalse && index > 1; });
+        if (isTrueFalse && Number(correct.value) > 1) correct.value = "0";
+      }
+    };
+    document.querySelectorAll(".question-type-select").forEach((element) => {
+      const select = element as unknown as HTMLSelectElement;
+      syncQuestionType(select);
+      select.addEventListener("change", () => syncQuestionType(select));
+    });
+    document.querySelectorAll<HTMLButtonElement>(".move-question").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const item = button.closest<HTMLElement>(".assessment-question-item");
+        const list = button.closest<HTMLElement>(".assessment-question-list");
+        const assessmentId = list?.dataset.assessmentId;
+        if (!item || !list || !assessmentId) return;
+        const items = [...list.querySelectorAll<HTMLElement>(":scope > .assessment-question-item")];
+        const index = items.indexOf(item);
+        const target = button.dataset.direction === "up" ? index - 1 : index + 1;
+        if (index < 0 || target < 0 || target >= items.length) return;
+        [items[index], items[target]] = [items[target], items[index]];
+        const questionIds = items.map((question) => question.dataset.questionId).filter(Boolean);
+        button.disabled = true;
+        const response = await fetch(`/api/tutor/assessments/${encodeURIComponent(assessmentId)}/questions/order`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ questionIds })
+        });
+        const result = await response.json().catch(() => ({})) as { error?: { message?: string } };
+        if (!response.ok) {
+          window.alert(result.error?.message ?? "The question order could not be changed.");
+          button.disabled = false;
+          return;
+        }
+        items.forEach((question) => list.appendChild(question));
+        [...list.querySelectorAll<HTMLElement>(":scope > .assessment-question-item")].forEach((question, itemIndex, orderedItems) => {
+          const summary = question.querySelector("summary");
+          if (summary) summary.firstChild!.textContent = `Question ${itemIndex + 1}: `;
+          const up = question.querySelector<HTMLButtonElement>('[data-direction="up"]');
+          const down = question.querySelector<HTMLButtonElement>('[data-direction="down"]');
+          if (up) up.disabled = itemIndex === 0;
+          if (down) down.disabled = itemIndex === orderedItems.length - 1;
+        });
+      });
+    });
+    document.querySelectorAll<HTMLFormElement>("[data-course-cover]").forEach((form) => {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const button = form.querySelector<HTMLButtonElement>("button");
+        const message = form.querySelector<HTMLElement>(".form-message");
+        if (button) button.disabled = true;
+        if (message) { message.className = "form-message"; message.textContent = "Uploading…"; }
+        try {
+          const response = await fetch(form.action, { method: "POST", body: new FormData(form) });
+          const payload = await response.json() as { error?: { message?: string } };
+          if (!response.ok) throw new Error(payload.error?.message ?? "Cover could not be uploaded.");
+          location.reload();
+        } catch (reason) {
+          if (message) { message.className = "form-error"; message.textContent = reason instanceof Error ? reason.message : "Cover could not be uploaded."; }
+          if (button) button.disabled = false;
+        }
       });
     });
   </script>

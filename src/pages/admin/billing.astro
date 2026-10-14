@@ -1,0 +1,57 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/admin/billing");
+const query = (Astro.url.searchParams.get("q") ?? "").trim().slice(0, 120);
+const status = (Astro.url.searchParams.get("status") ?? "").trim().slice(0, 40);
+const response = await requestApi(`/api/admin/billing?q=${encodeURIComponent(query)}&status=${encodeURIComponent(status)}`, { userId });
+if (response.status === 401) return Astro.redirect("/sign-in?next=/admin/billing");
+if (!response.ok) return Astro.redirect("/dashboard");
+type BillingPayment = {
+  id: string; status: string; amount_cents: number; currency: string; created_at: string;
+  stripe_checkout_session_id: string; stripe_payment_intent_id: string | null;
+  course_title: string; learner_name: string; learner_email: string; creator_name: string | null;
+  settlement_status: string | null; payable_cents: number | null; transaction_count: number;
+  open_case_count: number; latest_event: string | null;
+};
+type Batch = {
+  id: string; creator_name: string; creator_email: string; currency: string;
+  amount_cents: number; earning_count: number; status: string; scheduled_for: string;
+  provider_transfer_id: string | null; failure_message: string | null;
+};
+const data = await response.json<{
+  accessRole: string;
+  summary: Array<{ currency: string; paid_cents: number; refunded_cents: number; payout_cents: number; order_count: number }>;
+  payments: BillingPayment[];
+  payoutBatches: Batch[];
+  alerts: { paid_without_transaction: number; access_without_payment: number; eligible_unbatched: number; failed_webhooks: number; failed_transfers: number };
+}>();
+const money = (amount: number | null | undefined, currency = "SGD") => new Intl.NumberFormat("en-SG", {
+  style: "currency", currency
+}).format(Number(amount ?? 0) / 100);
+const alerts = [
+  ["Paid orders missing a transaction", data.alerts.paid_without_transaction],
+  ["Active access without paid order", data.alerts.access_without_payment],
+  ["Eligible earnings not yet batched", data.alerts.eligible_unbatched],
+  ["Failed provider events", data.alerts.failed_webhooks],
+  ["Failed creator transfers", data.alerts.failed_transfers]
+] as const;
+---
+<BaseLayout title="Billing operations — PencilScope">
+  <section class="dashboard-hero"><div class="shell"><a class="back-link" href="/dashboard">← Dashboard</a><span class="eyebrow">System operations</span><h1>Billing operations</h1><p>Trace learner payments, creator earnings and payouts from a single reconciled view.</p></div></section>
+  <section class="shell operations-layout billing-operations">
+    <article class="panel">
+      <div class="dashboard-section-heading"><div><span class="eyebrow">Reconciliation</span><h2>System health</h2><p>Signed in with {data.accessRole.replaceAll("_", " ")} access.</p></div></div>
+      <div class="billing-alert-grid">{alerts.map(([label, count]) => <section class:list={{ attention: Number(count) > 0 }}><strong>{Number(count)}</strong><span>{label}</span></section>)}</div>
+    </article>
+    {data.summary.length > 0 && <article class="panel"><span class="eyebrow">Financial totals</span><h2>Recorded money movement</h2><div class="settlement-summary">{data.summary.map((item) => <><section><small>Collected · {item.currency}</small><strong>{money(item.paid_cents, item.currency)}</strong></section><section><small>Refunded</small><strong>{money(item.refunded_cents, item.currency)}</strong></section><section><small>Creator payouts</small><strong>{money(item.payout_cents, item.currency)}</strong></section><section><small>Orders</small><strong>{item.order_count}</strong></section></>)}</div></article>}
+    <article class="panel">
+      <span class="eyebrow">Payment search</span><h2>Orders and settlement status</h2>
+      <form class="billing-filter" method="get"><label>Search<input name="q" value={query} placeholder="Learner, creator, order or Stripe reference" /></label><label>Status<select name="status"><option value="">All statuses</option>{["paid","refunded","pending_course","review_period","held","eligible","transferring","transferred"].map((value) => <option value={value} selected={status === value}>{value.replaceAll("_", " ")}</option>)}</select></label><button class="button button-small" type="submit">Apply</button></form>
+      <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Payment</th><th>People</th><th>Product</th><th>Money</th><th>Tracking</th></tr></thead><tbody>{data.payments.map((payment) => <tr><td><strong>{payment.id}</strong><small>{new Date(payment.created_at).toLocaleString("en-SG")}</small><code>{payment.stripe_payment_intent_id ?? payment.stripe_checkout_session_id}</code></td><td><strong>{payment.learner_name}</strong><small>{payment.learner_email}</small><small>Creator: {payment.creator_name ?? "Unassigned"}</small></td><td>{payment.course_title}</td><td><strong>{money(payment.amount_cents, payment.currency)}</strong><small>Creator net {money(payment.payable_cents, payment.currency)}</small></td><td><span class={`settlement-status ${payment.open_case_count ? "held" : payment.settlement_status ?? payment.status}`}>{payment.open_case_count ? "Open issue" : payment.settlement_status ?? payment.status}</span><small>{payment.latest_event ?? "No timeline event"} · {payment.transaction_count} ledger entries</small></td></tr>)}</tbody></table></div>
+    </article>
+    <article class="panel"><span class="eyebrow">Creator payouts</span><h2>Payout batches</h2>{data.payoutBatches.length ? <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Creator</th><th>Scheduled</th><th>Earnings</th><th>Amount</th><th>Status and reference</th></tr></thead><tbody>{data.payoutBatches.map((batch) => <tr><td><strong>{batch.creator_name}</strong><small>{batch.creator_email}</small></td><td>{new Date(batch.scheduled_for).toLocaleString("en-SG")}</td><td>{batch.earning_count}</td><td>{money(batch.amount_cents, batch.currency)}</td><td><span class={`settlement-status ${batch.status}`}>{batch.status}</span><code>{batch.provider_transfer_id ?? batch.id}</code>{batch.failure_message && <small>{batch.failure_message}</small>}</td></tr>)}</tbody></table></div> : <p class="form-message">No payout batches have been created yet.</p>}</article>
+  </section>
+</BaseLayout>

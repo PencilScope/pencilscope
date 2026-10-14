@@ -33,6 +33,7 @@ function run(args) {
 
 if (action === "deploy") {
   run(["exec", "wrangler", "deploy", "--config", "workers/api/wrangler.jsonc", "--env", environment]);
+  run(["exec", "wrangler", "deploy", "--config", "workers/mcp/wrangler.jsonc", "--env", environment]);
 }
 
 run(["exec", "astro", "build"]);

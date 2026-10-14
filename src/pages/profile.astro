@@ -1,0 +1,78 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/profile");
+const response = await requestApi("/api/navigation-state", { userId });
+if (response.status === 401) return Astro.redirect("/sign-in?next=/profile");
+const data = response.ok ? await response.json<{
+  user: { id: string; email: string; displayName: string; avatarAssetId: string | null };
+}>() : null;
+if (!data) return Astro.redirect("/dashboard?error=Profile%20is%20temporarily%20unavailable.");
+const googleResponse = await requestApi("/api/integrations/google/status", { userId });
+const google = googleResponse.ok ? await googleResponse.json<{
+  integration: { google_email: string; status: string; updated_at: string } | null;
+}>() : { integration: null };
+const initials = data.user.displayName.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+const error = Astro.url.searchParams.get("error");
+const googleConnected = Astro.url.searchParams.get("google") === "connected";
+---
+
+<BaseLayout title="Profile — PencilScope">
+  <section class="dashboard-hero compact-hero"><div class="shell">
+    <a class="back-link" href="/dashboard">← Dashboard</a>
+    <span class="eyebrow">Your profile</span>
+    <h1>Profile picture and details</h1>
+    <p>Your picture helps learners, creators and connections recognise you.</p>
+  </div></section>
+  <section class="shell profile-layout">
+    {error && <p class="form-error profile-alert">{error}</p>}
+    {googleConnected && <p class="form-success profile-alert">Google Calendar and Meet connected.</p>}
+    <article class="panel profile-card">
+      <div class="profile-picture-preview" data-avatar-preview>
+        {data.user.avatarAssetId ? <img src={`/api/media/${data.user.avatarAssetId}`} alt={`${data.user.displayName} profile`} /> : <span>{initials}</span>}
+      </div>
+      <div class="profile-identity"><h2>{data.user.displayName}</h2><p>{data.user.email}</p></div>
+      <form class="stack-form profile-upload" data-profile-upload>
+        <label>Profile picture<input type="file" name="image" accept="image/jpeg,image/png,image/webp" required /></label>
+        <small>JPG, PNG or WebP. Maximum 5 MB.</small>
+        <button class="button" type="submit">Upload picture</button>
+        <p class="form-success" hidden data-upload-success>Profile picture updated.</p>
+        <p class="form-error" hidden data-upload-error></p>
+      </form>
+    </article>
+    <aside class="panel profile-links">
+      <span class="eyebrow">Account</span><h2>Manage your experience</h2>
+      <a href="/onboarding"><strong>Preferences</strong><small>Manage contacts, country and interests</small></a>
+      <a href="/integrations/mcp"><strong>AI assistants</strong><small>Connect ChatGPT, Claude and compatible MCP clients</small></a>
+      <a href="/network"><strong>Network</strong><small>People, messages, collaboration and sharing</small></a>
+      <a href="/payments"><strong>Payments</strong><small>View purchases and payment history</small></a>
+      <a href="/action-history"><strong>Action history</strong><small>Review, archive and manage your account activity</small></a>
+      <section class="profile-integration"><strong>Google Calendar & Meet</strong>{google.integration ? <><small>Connected as {google.integration.google_email}</small><a class="button button-small button-secondary" href="/api/integrations/google/start">Reconnect</a></> : <><small>Connect your account to create Meet links and invite learners automatically.</small><a class="button button-small" href="/api/integrations/google/start">Connect Google</a></>}</section>
+    </aside>
+  </section>
+</BaseLayout>
+
+<script>
+  const form = document.querySelector<HTMLFormElement>("[data-profile-upload]");
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector<HTMLButtonElement>("button");
+    const error = form.querySelector<HTMLElement>("[data-upload-error]");
+    const success = form.querySelector<HTMLElement>("[data-upload-success]");
+    if (button) button.disabled = true;
+    if (error) error.hidden = true;
+    if (success) success.hidden = true;
+    try {
+      const response = await fetch("/api/profile/avatar", { method: "POST", body: new FormData(form) });
+      const payload = await response.json() as { error?: { message?: string } };
+      if (!response.ok) throw new Error(payload?.error?.message ?? "Picture could not be uploaded.");
+      if (success) success.hidden = false;
+      window.setTimeout(() => window.location.reload(), 350);
+    } catch (reason) {
+      if (error) { error.textContent = reason instanceof Error ? reason.message : "Picture could not be uploaded."; error.hidden = false; }
+      if (button) button.disabled = false;
+    }
+  });
+</script>

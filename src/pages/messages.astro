@@ -1,0 +1,7 @@
+---
+const target = new URL("/network", Astro.url);
+target.searchParams.set("section", "messages");
+const thread = Astro.url.searchParams.get("thread");
+if (thread) target.searchParams.set("thread", thread);
+return Astro.redirect(`${target.pathname}${target.search}`, 301);
+---

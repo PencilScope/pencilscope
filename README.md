@@ -15,6 +15,7 @@ PencilScope is an open learning marketplace for recorded courses, live online le
 - API-owned R2, Queue, D1, Stripe and Resend bindings
 - Health endpoint at `/api/health`
 - Individual and Organisation registration with session-backed sign-in
+- Google and Facebook OAuth sign-in and registration with provider identity linking
 - Parent-managed learner profiles and role-aware dashboards
 - Stripe payment-to-enrolment entitlement assignment
 - Protected course modules, lessons and progress tracking
@@ -35,6 +36,8 @@ Requirements: Node.js 22.12 or newer and pnpm.
 3. Apply the local migration with `pnpm db:migrate:local`.
 4. Start the API Worker with `pnpm api:dev`.
 5. In a second terminal, start the Astro web Worker with `pnpm dev`.
+
+Run `pnpm test:storage` for an isolated local D1/R2 integration check. It creates temporary Wrangler state, applies every migration, exercises uploads, immutable replacement versions, quota accounting, rollback, deletion and recovery, then removes that state.
 
 The catalogue renders sample content before D1 is initialised. Publishing a paid offering from the creator studio creates or reuses the course's Stripe Product and creates an immutable one-time Price for that offering. Checkout requires migrated D1 data and Stripe test credentials.
 
@@ -66,6 +69,34 @@ pnpm exec wrangler secret put STRIPE_WEBHOOK_SECRET --config workers/api/wrangle
 pnpm exec wrangler secret put RESEND_API_KEY --config workers/api/wrangler.jsonc --env production
 pnpm exec wrangler secret put EMAIL_FROM --config workers/api/wrangler.jsonc --env production
 ```
+
+### Google and Facebook sign-in
+
+Create a Google OAuth web client and a Meta app with Facebook Login. Register these exact callback URLs:
+
+- Local: `http://localhost:4321/api/auth/google/callback` and `http://localhost:4321/api/auth/facebook/callback`
+- UAT: `https://pencilscope-uat.rdproducts-adm1.workers.dev/api/auth/google/callback` and `https://pencilscope-uat.rdproducts-adm1.workers.dev/api/auth/facebook/callback`
+- Production: `https://pencilscope.com/api/auth/google/callback` and `https://pencilscope.com/api/auth/facebook/callback`
+
+Google requires the `openid`, `email`, and `profile` scopes. Facebook Login requires `email` and `public_profile`. Configure credentials on both the public web Worker and private API Worker; client secrets belong only on the API Worker:
+
+```powershell
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID --config wrangler.jsonc --env uat
+pnpm exec wrangler secret put FACEBOOK_APP_ID --config wrangler.jsonc --env uat
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID --config workers/api/wrangler.jsonc --env uat
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET --config workers/api/wrangler.jsonc --env uat
+pnpm exec wrangler secret put FACEBOOK_APP_ID --config workers/api/wrangler.jsonc --env uat
+pnpm exec wrangler secret put FACEBOOK_APP_SECRET --config workers/api/wrangler.jsonc --env uat
+
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID --config wrangler.jsonc --env production
+pnpm exec wrangler secret put FACEBOOK_APP_ID --config wrangler.jsonc --env production
+pnpm exec wrangler secret put GOOGLE_CLIENT_ID --config workers/api/wrangler.jsonc --env production
+pnpm exec wrangler secret put GOOGLE_CLIENT_SECRET --config workers/api/wrangler.jsonc --env production
+pnpm exec wrangler secret put FACEBOOK_APP_ID --config workers/api/wrangler.jsonc --env production
+pnpm exec wrangler secret put FACEBOOK_APP_SECRET --config workers/api/wrangler.jsonc --env production
+```
+
+New social users continue through the same onboarding flow as email registrations. When a provider returns the same normalized email as an active PencilScope account, its provider identity is linked to that account instead of creating a duplicate.
 
 Configure separate Stripe webhook endpoints for:
 
@@ -118,6 +149,36 @@ Creator endpoints require an active authenticated account that owns the course. 
 
 Stripe creation calls use stable idempotency keys. A failed sync leaves the course unpublished with `pricing_status = 'failed'`, allowing a safe retry. Drafts do not create Stripe resources until publication.
 
+## Hybrid D1/R2 content storage
+
+D1 is the operational source of truth for ownership, search metadata, permissions, product links, quota subscriptions, recovery state and the R2 object catalogue. R2 stores file bytes only.
+
+- `r2_asset_objects` records each immutable R2 object, byte size, MIME type, ETag and retention state.
+- `media_asset_versions` provides ordered immutable versions for a logical `media_assets` record.
+- New and replacement uploads always use a unique R2 key. Rolling back creates a new catalogue version pointing at a retained object; it never overwrites bytes.
+- Quotas include every unpurged R2 object, including superseded versions and files inside the seven-day recovery window.
+- Deleting unused content starts a seven-day recovery window. The daily Worker schedule removes expired R2 objects and marks their catalogue rows purged.
+- R2 object keys remain private and are not returned by Content Library or version APIs.
+
+Relevant creator endpoints:
+
+- `POST /api/creator/content-library/items/:id/versions` uploads a direct replacement version.
+- `GET /api/creator/content-library/items/:id/versions` lists safe version metadata.
+- `POST /api/creator/content-library/items/:id/versions/:versionId/restore` rolls back by creating a new current version.
+- `DELETE /api/creator/content-library/items/:id` starts the seven-day recovery window.
+- `POST /api/creator/content-library/items/:id/restore` recovers deleted content before expiry.
+- Resumable upload initiation accepts `libraryItemId` to create a large replacement version.
+
 ## Remaining production work
 
 The implemented journeys are an MVP. Before a public marketplace launch, add creator identity and course moderation, Stripe Connect payouts, password reset and email verification, refunds and cancellation policies, manual grading, certificates, calendar/meeting-provider integration, reminder emails and a full automated browser test suite.
+# PencilScope Creator MCP
+
+PencilScope exposes a remote, OAuth-protected MCP server for ChatGPT, Claude and other compatible assistants.
+
+- Local endpoint: `http://localhost:8790/mcp`
+- UAT endpoint: `https://pencilscope-mcp-uat.rdproducts-adm1.workers.dev/mcp`
+- Production endpoint: `https://pencilscope-mcp-production.rdproducts-adm1.workers.dev/mcp`
+- OAuth metadata: `/.well-known/oauth-authorization-server` on the matching PencilScope web origin
+
+The MCP Worker validates a per-user OAuth token, strips caller identity, and forwards authoring operations to the private core API service binding. It can list safe Content Library metadata, attach creator-owned library items by ID, create audio or uploaded-ebook products, build native ebook chapters, and attach playable library videos to video-course lessons. R2 storage keys are never returned. Product creation is draft-first; publish, unpublish and delete tools require explicit confirmation. Apply D1 migrations before deploying the API and MCP Workers.

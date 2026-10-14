@@ -1,0 +1,5 @@
+---
+const target = new URL("/network", Astro.url);
+for (const [key, value] of Astro.url.searchParams) target.searchParams.append(key, value);
+return Astro.redirect(`${target.pathname}${target.search}`, 301);
+---

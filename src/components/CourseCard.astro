@@ -1,21 +1,43 @@
 ---
-import { formatPrice, type CourseSummary } from "@/lib/courses";
-type Props = { course: CourseSummary };
-const { course } = Astro.props;
+import { formatPrice, type CourseFeature, type CourseSummary } from "@/lib/courses";
+type Props = { course: CourseSummary; compact?: boolean };
+const { course, compact = false } = Astro.props;
+const featureDetails: Record<CourseFeature, { label: string; mark: string }> = {
+  "live-online": { label: "Live online", mark: "●" },
+  "in-person": { label: "In person", mark: "◆" },
+  "self-paced": { label: "Self-paced", mark: "▶" },
+  video: { label: "Video", mark: "▷" },
+  ebook: { label: "Ebook", mark: "▤" },
+  quiz: { label: "Quiz", mark: "✓" },
+  test: { label: "Test", mark: "T" },
+  "mock-exam": { label: "Mock exam", mark: "M" },
+  flashcards: { label: "Flashcards", mark: "▣" },
+  "ai-practice": { label: "AI practice", mark: "✦" }
+};
+const visibleFeatures = compact ? course.features.slice(0, 4) : course.features;
+const hiddenFeatureCount = course.features.length - visibleFeatures.length;
 ---
 
-<article class={`course-card accent-${course.accent}`}>
+<article class:list={["course-card", `accent-${course.accent}`, { "course-card-compact": compact }]}>
   <a class="course-visual" href={`/courses/${course.slug}`} aria-label={`View ${course.title}`}>
+    {course.coverAssetId && <img class="course-cover" src={`/api/media/${course.coverAssetId}`} alt="" loading="lazy" />}
     <span class="subject-pill">{course.categories[0] ?? course.subject}</span>
-    <span class="course-mark" aria-hidden="true">{course.subject.slice(0, 1)}</span>
+    {!course.coverAssetId && <span class="course-mark" aria-hidden="true">{course.subject.slice(0, 1)}</span>}
     <span class="level">{course.level}</span>
   </a>
   <div class="course-body">
     <div class="course-meta"><span>{course.deliveryMode}</span><span>by {course.tutorName}</span></div>
+    <small class="product-id">ID {course.id}</small>
     <h3><a href={`/courses/${course.slug}`}>{course.title}</a></h3>
     <p>{course.description}</p>
+    {visibleFeatures.length > 0 && <ul class="course-features" aria-label="Included course formats and activities">
+      {visibleFeatures.map((feature) => <li class={`course-feature feature-${feature}`} title={featureDetails[feature].label}>
+        <span aria-hidden="true">{featureDetails[feature].mark}</span>{featureDetails[feature].label}
+      </li>)}
+      {hiddenFeatureCount > 0 && <li class="course-feature course-feature-more">+{hiddenFeatureCount} more</li>}
+    </ul>}
     <div class="course-footer">
-      <strong>{formatPrice(course.priceCents, course.currency)}</strong>
+      <div class="course-price"><span>From</span><strong>{formatPrice(course.priceCents, course.currency)}</strong></div>
       <a class="text-link" href={`/courses/${course.slug}`}>View course <span>→</span></a>
     </div>
   </div>

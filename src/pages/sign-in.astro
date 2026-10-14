@@ -11,13 +11,24 @@ const next = requestedNext?.startsWith("/") && !requestedNext.startsWith("//") ?
       <h1>Sign in to keep learning</h1>
       <p>Open learner courses, manage progress, or continue building your tutor content.</p>
       {error && <p class="form-error" role="alert">{error}</p>}
+      <div class="social-auth" aria-label="Social sign-in options">
+        <a class="social-auth-button google" href={`/api/auth/google/start?intent=signin&next=${encodeURIComponent(next)}`}>
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path fill="#4285f4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.3Z"/><path fill="#34a853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1a5.8 5.8 0 0 1-5.5-4H3.2v2.6A10 10 0 0 0 12 22Z"/><path fill="#fbbc05" d="M6.5 14a6 6 0 0 1 0-3.9V7.5H3.2a10 10 0 0 0 0 9.1L6.5 14Z"/><path fill="#ea4335" d="M12 6a5.4 5.4 0 0 1 3.8 1.5l2.9-2.8A9.7 9.7 0 0 0 12 2a10 10 0 0 0-8.8 5.5l3.3 2.6A5.8 5.8 0 0 1 12 6Z"/></svg>
+          Continue with Google
+        </a>
+        <a class="social-auth-button facebook" href={`/api/auth/facebook/start?intent=signin&next=${encodeURIComponent(next)}`}>
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path fill="currentColor" d="M24 12a12 12 0 1 0-13.9 11.9v-8.4h-3V12h3V9.3c0-3 1.8-4.7 4.6-4.7 1.3 0 2.7.2 2.7.2v3h-1.5c-1.5 0-2 .9-2 1.8V12h3.3l-.5 3.5h-2.8v8.4A12 12 0 0 0 24 12Z"/></svg>
+          Continue with Facebook
+        </a>
+      </div>
+      <div class="auth-divider"><span>or sign in with email</span></div>
       <form class="stack-form" action="/api/auth/login" method="post">
         <input type="hidden" name="next" value={next} />
         <label>Email<input name="email" required type="email" autocomplete="email" /></label>
         <label>Password<input name="password" required type="password" autocomplete="current-password" /></label>
         <button class="button button-full" type="submit">Sign in</button>
       </form>
-      <a class="text-link" href="/register">Create an account</a>
+      <a class="text-link" href={`/register?next=${encodeURIComponent(next)}`}>Create an account</a>
     </div>
   </section>
 </BaseLayout>

@@ -1,0 +1,242 @@
+---
+import { getEnv } from "@/lib/runtime";
+
+const MCP_URL = getEnv(Astro.locals).MCP_SERVER_URL;
+const { compact = false } = Astro.props;
+const providers = [
+  {
+    id: "chatgpt",
+    name: "ChatGPT",
+    mark: "CG",
+    availability: "Web · direct connection",
+    status: "Ready",
+    statusClass: "ready",
+    intro: "Connect PencilScope as a custom MCP plugin, then create drafts from a ChatGPT conversation.",
+    action: "Open ChatGPT",
+    href: "https://chatgpt.com/",
+    steps: [
+      "Open ChatGPT on the web and go to Plugins.",
+      "Select +, then Add custom MCP server.",
+      "Name it PencilScope Creator, paste the MCP URL below and choose OAuth authentication.",
+      "Create and install the plugin, sign in to PencilScope, then select Allow connection.",
+      "Start a new Work chat, type @ and select PencilScope Creator before entering a creation prompt."
+    ]
+  },
+  {
+    id: "claude",
+    name: "Claude",
+    mark: "CL",
+    availability: "Web and desktop · direct connection",
+    status: "Ready",
+    statusClass: "ready",
+    intro: "Add PencilScope as a remote custom connector and use its tools from Claude conversations.",
+    action: "Open Claude",
+    href: "https://claude.ai/",
+    steps: [
+      "In Claude, open Customize, then Connectors.",
+      "Select + Add, then Add custom connector.",
+      "Name it PencilScope Creator and paste the MCP URL below.",
+      "Choose OAuth and Use Claude’s published identity when available, then connect and allow access.",
+      "In a conversation, select +, open Connectors and enable PencilScope Creator before prompting."
+    ]
+  },
+  {
+    id: "gemini",
+    name: "Gemini",
+    mark: "GM",
+    availability: "Gemini CLI or Enterprise",
+    status: "Advanced",
+    statusClass: "advanced",
+    intro: "Consumer Gemini chat does not currently provide this custom connection flow. Use Gemini CLI or a configured Gemini Enterprise workspace.",
+    action: "Gemini CLI guide",
+    href: "https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html",
+    steps: [
+      "Install and sign in to Gemini CLI on a computer with browser access.",
+      `Run: gemini mcp add --transport http pencilscope ${MCP_URL}`,
+      "In Gemini CLI, run /mcp auth pencilscope.",
+      "Complete PencilScope sign-in and approve the requested permissions in the browser.",
+      "Start a Gemini CLI conversation and ask it to create a PencilScope draft."
+    ]
+  },
+  {
+    id: "copilot",
+    name: "GitHub Copilot",
+    mark: "GH",
+    availability: "IDE or Copilot CLI",
+    status: "Advanced",
+    statusClass: "advanced",
+    intro: "Use a Copilot Agent experience that supports remote MCP servers, such as Visual Studio, VS Code or Copilot CLI.",
+    action: "Copilot MCP guide",
+    href: "https://docs.github.com/en/copilot/how-tos/copilot-in-your-ide/customize-copilot/extend-copilot-with-tools-and-context/extend-copilot-chat-with-mcp",
+    steps: [
+      "Open GitHub Copilot Chat in your supported IDE and switch to Agent mode.",
+      "Open the tools picker, select + and choose Configure MCP server.",
+      "Choose HTTP or Streamable HTTP, name the server pencilscope and paste the MCP URL.",
+      "Save the configuration, select Auth above the server entry and approve PencilScope access.",
+      "Return to Copilot Chat, enable the PencilScope tools and enter a creation prompt."
+    ]
+  },
+  {
+    id: "other",
+    name: "Other MCP client",
+    mark: "MCP",
+    availability: "Compatible AI assistants",
+    status: "Manual",
+    statusClass: "manual",
+    intro: "Use this option for an AI assistant that supports remote Streamable HTTP MCP servers and OAuth 2.1.",
+    action: "Connection overview",
+    href: "/integrations/mcp",
+    steps: [
+      "Open the assistant’s MCP, tools, plugins or connectors settings.",
+      "Add a remote Streamable HTTP server and paste the MCP URL below.",
+      "Choose OAuth with dynamic client registration and PKCE when prompted.",
+      "Sign in to PencilScope and review the requested creation permissions.",
+      "Enable the PencilScope tools in a new conversation and begin with a draft creation prompt."
+    ]
+  }
+];
+const prompts = [
+  {
+    title: "Online course",
+    description: "Live teaching with scheduled online classes",
+    value: "Using PencilScope, create an online_course draft titled ‘Conversational English Live’. Set the audience to beginners, add four modules with clear lesson titles, use live online delivery, and return the new product ID. Keep it as a draft and do not publish it."
+  },
+  {
+    title: "In-person course",
+    description: "Venue-based classes or workshops",
+    value: "Using PencilScope, create an in_person_course draft titled ‘Hands-on Watercolour Workshop’. Set the audience to beginners, add modules for materials, colour mixing, composition and a final project, and return the new product ID. Keep it as a draft and do not publish it."
+  },
+  {
+    title: "Video course",
+    description: "Recorded, self-paced modules and lessons",
+    value: "Using PencilScope, create a video_course draft titled ‘Excel Essentials’. Add modules for formulas, data cleaning, charts and a final project, with estimated learning time for every lesson, and return the new product ID. Keep it as a draft and do not publish it."
+  },
+  {
+    title: "Audio book",
+    description: "Narrated, listen-first learning",
+    value: "Using PencilScope, list my audio Content Library items. Ask me which item to use, then create a draft audio book titled ‘Mindful Study Habits’ with that item as primaryLibraryItemId. Add a useful description, audience and estimated listening time, return the product ID, and do not publish it."
+  },
+  {
+    title: "Ebook",
+    description: "A digital book ready for Ebook Studio",
+    value: "Using PencilScope, create a draft ebook titled ‘A Practical Guide to Study Skills’. Add a useful description, audience and estimated reading time, and return the new product ID. Keep it as a draft and do not publish it. I will review the chapters in PencilScope Ebook Studio."
+  },
+  {
+    title: "Quiz",
+    description: "A quick check with immediate results",
+    value: "Using PencilScope, create a draft quiz titled ‘Primary 6 Mathematics Practice’. Add 20 multiple-choice questions about fractions and percentages, a 45-minute time limit, a 70% passing score, explanations, and return the new product ID. Keep it as a draft and do not publish it."
+  },
+  {
+    title: "Test",
+    description: "A structured graded assessment",
+    value: "Using PencilScope, create a draft test titled ‘Business English Skills Test’. Add 25 questions of mixed difficulty, a 60-minute time limit, a 70% passing score, answer explanations, and return the new product ID. Keep it as a draft and do not publish it."
+  },
+  {
+    title: "Mock exam",
+    description: "Timed exam practice with explanations",
+    value: "Using PencilScope, create a draft mock exam titled ‘Secondary Mathematics Mock Exam’. Add 30 questions of mixed difficulty, a 90-minute time limit, a 60% passing score, an explanation for every correct answer, and return the new product ID. Keep it as a draft and do not publish it."
+  }
+];
+---
+
+<div class:list={["create-with-ai", { compact }]} data-ai-creator>
+  <details class="ai-provider-menu">
+    <summary class="button button-secondary ai-create-trigger"><span aria-hidden="true">✦</span> Connect and create with AI <span class="ai-chevron" aria-hidden="true">⌄</span></summary>
+    <div class="ai-provider-popover" role="menu" aria-label="Choose an AI assistant">
+      <div class="ai-provider-popover-heading"><strong>Choose an AI assistant</strong><small>Connect once, then create products conversationally.</small></div>
+      {providers.map((provider) => <button type="button" role="menuitem" data-ai-provider={provider.id}>
+        <span class={`ai-provider-mark ${provider.id}`}>{provider.mark}</span>
+        <span><strong>{provider.name}</strong><small>{provider.availability}</small></span>
+        <em class={provider.statusClass}>{provider.status}</em>
+      </button>)}
+    </div>
+  </details>
+
+  <dialog class="ai-guide-dialog" aria-labelledby="ai-guide-title">
+    <div class="ai-guide-shell">
+      <header class="ai-guide-header">
+        <div><span class="eyebrow">Guided AI setup</span><h2 id="ai-guide-title">Connect and create with AI</h2><p>New to AI? Follow these steps in order. You will connect an assistant, give it a simple request, and review the draft before anything is published.</p></div>
+        <form method="dialog"><button class="ai-guide-close" aria-label="Close Connect and create with AI instructions">×</button></form>
+      </header>
+      <div class="ai-guide-layout">
+        <nav class="ai-guide-provider-tabs" aria-label="AI assistant instructions">
+          {providers.map((provider, index) => <button type="button" class:list={{ active: index === 0 }} data-ai-tab={provider.id} aria-pressed={index === 0 ? "true" : "false"}>
+            <span class={`ai-provider-mark ${provider.id}`}>{provider.mark}</span><span><strong>{provider.name}</strong><small>{provider.status}</small></span>
+          </button>)}
+        </nav>
+        <div class="ai-guide-content">
+          <ol class="ai-beginner-path" aria-label="Four steps to create with AI">
+            <li><strong>Choose</strong><span>Select the AI assistant you already use, or start with ChatGPT.</span></li>
+            <li><strong>Connect</strong><span>Follow the numbered instructions below once to link it safely to PencilScope.</span></li>
+            <li><strong>Ask</strong><span>Copy a starter prompt, then change the topic, age group, or question count.</span></li>
+            <li><strong>Review</strong><span>Open the saved draft in PencilScope, check every detail, and publish only when ready.</span></li>
+          </ol>
+          {providers.map((provider, index) => <section data-ai-panel={provider.id} hidden={index !== 0}>
+            <div class="ai-guide-provider-heading"><div><span class={`ai-availability ${provider.statusClass}`}>{provider.status}</span><h3>Connect with {provider.name}</h3><p>{provider.intro}</p></div><a class="button button-small button-secondary" href={provider.href} target={provider.href.startsWith("http") ? "_blank" : undefined} rel={provider.href.startsWith("http") ? "noreferrer" : undefined}>{provider.action} ↗</a></div>
+            <ol class="ai-guide-steps">{provider.steps.map((step) => <li><span>{step}</span></li>)}</ol>
+          </section>)}
+
+          <section class="ai-endpoint-card">
+            <div><span class="eyebrow">Connection address</span><strong>{MCP_URL}</strong><small>You do not need to understand the technical terms. Copy this address only when the numbered instructions ask for it. Never paste your password or an access token into a chat.</small></div>
+            <button type="button" class="button button-small button-secondary" data-copy-value={MCP_URL}>Copy URL</button>
+          </section>
+
+          <section class="ai-prompt-section">
+            <div class="ai-prompt-heading"><div><span class="eyebrow">Start creating</span><h3>Copy a starter prompt</h3></div><small>Every example creates a draft. Review it in My Creations before publishing.</small></div>
+            <div class="ai-prompt-grid">{prompts.map((prompt) => <button type="button" data-copy-value={prompt.value}><span aria-hidden="true">✦</span><strong>{prompt.title}</strong><small>{prompt.description}</small><em data-copy-status>Copy prompt</em></button>)}</div>
+          </section>
+
+          <aside class="ai-guide-limitations"><strong>Finish safely in PencilScope</strong><p>AI can search your private Content Library by item ID, create online, in-person and video course drafts, attach videos to lessons, and build audio books, uploaded ebooks or native chapter-based ebooks. Storage keys remain private. Pricing, bundles and enrolment offers are completed in PencilScope. Publishing, unpublishing and deletion require explicit confirmation.</p><a href="/dashboard?workspace=creation&section=content">Review My Creations →</a></aside>
+        </div>
+      </div>
+    </div>
+  </dialog>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLElement>("[data-ai-creator]").forEach((root) => {
+    const dialog = root.querySelector<HTMLDialogElement>(".ai-guide-dialog");
+    const details = root.querySelector<HTMLDetailsElement>(".ai-provider-menu");
+    const selectProvider = (providerId: string) => {
+      root.querySelectorAll<HTMLElement>("[data-ai-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.aiPanel !== providerId;
+      });
+      root.querySelectorAll<HTMLButtonElement>("[data-ai-tab]").forEach((tab) => {
+        const active = tab.dataset.aiTab === providerId;
+        tab.classList.toggle("active", active);
+        tab.setAttribute("aria-pressed", String(active));
+      });
+    };
+    root.querySelectorAll<HTMLButtonElement>("[data-ai-provider]").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectProvider(button.dataset.aiProvider ?? "chatgpt");
+        if (details) details.open = false;
+        dialog?.showModal();
+      });
+    });
+    root.querySelectorAll<HTMLButtonElement>("[data-ai-tab]").forEach((button) => {
+      button.addEventListener("click", () => selectProvider(button.dataset.aiTab ?? "chatgpt"));
+    });
+    root.querySelectorAll<HTMLButtonElement>("[data-copy-value]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const status = button.querySelector<HTMLElement>("[data-copy-status]");
+        const original = status?.textContent ?? button.textContent ?? "Copy";
+        const setLabel = (value: string) => {
+          if (status) status.textContent = value;
+          else button.textContent = value;
+        };
+        try {
+          await navigator.clipboard.writeText(button.dataset.copyValue ?? "");
+          setLabel(status ? "Prompt copied" : "Copied");
+          window.setTimeout(() => setLabel(original), 1800);
+        } catch {
+          setLabel("Copy unavailable");
+          window.setTimeout(() => setLabel(original), 1800);
+        }
+      });
+    });
+    dialog?.addEventListener("click", (event) => {
+      if (event.target === dialog) dialog.close();
+    });
+  });
+</script>

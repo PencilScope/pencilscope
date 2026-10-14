@@ -1,0 +1,56 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { getEnv } from "@/lib/runtime";
+
+const userId = await Astro.session?.get("userId");
+const authorizePath = `${Astro.url.pathname}${Astro.url.search}`;
+if (typeof userId !== "string") {
+  return Astro.redirect(`/sign-in?next=${encodeURIComponent(authorizePath)}`);
+}
+const query = Astro.url.searchParams;
+const response = await getEnv(Astro.locals).API.fetch(
+  `https://pencilscope-api.internal/api/mcp/oauth/authorize-request?${query.toString()}`,
+  { headers: { "x-pencilscope-user-id": userId } }
+);
+const connection = response.ok
+  ? await response.json<{ clientName: string; scopes: string[]; resource: string }>()
+  : null;
+const permissionLabels: Record<string, string> = {
+  "products:read": "View your product drafts and publication status",
+  "products:write": "Create and edit your learning products",
+  "products:publish": "Publish or unpublish products after confirmation",
+  "courses:write": "Create course drafts, modules and lessons",
+  "library:read": "View safe metadata for items in your private Content Library",
+  "library:write": "Attach your Content Library items to drafts you own"
+};
+---
+<BaseLayout title="Connect an AI assistant — PencilScope">
+  <section class="auth-shell shell oauth-consent-shell">
+    <article class="auth-card oauth-consent-card">
+      <span class="eyebrow">Secure connection</span>
+      {connection ? (
+        <>
+          <h1>Connect {connection.clientName}?</h1>
+          <p>This assistant is requesting permission to help create and manage content in your PencilScope account.</p>
+          <ul class="oauth-permission-list">
+            {connection.scopes.map((scope) => <li><span aria-hidden="true">✓</span>{permissionLabels[scope] ?? scope}</li>)}
+          </ul>
+          <p class="privacy-note">The assistant never receives your PencilScope password. You can revoke its access later. Consequential actions still require confirmation.</p>
+          <form class="oauth-consent-actions" action="/oauth/authorize/complete" method="post">
+            {["client_id", "redirect_uri", "response_type", "scope", "state", "code_challenge", "code_challenge_method", "resource"].map((name) =>
+              <input type="hidden" name={name} value={query.get(name) ?? ""} />
+            )}
+            <button class="button" type="submit" name="decision" value="allow">Allow connection</button>
+            <button class="button button-secondary" type="submit" name="decision" value="deny">Cancel</button>
+          </form>
+        </>
+      ) : (
+        <>
+          <h1>Invalid connection request</h1>
+          <p>The requesting application or its callback address could not be verified.</p>
+          <a class="button button-secondary" href="/integrations/mcp">Return to AI assistants</a>
+        </>
+      )}
+    </article>
+  </section>
+</BaseLayout>

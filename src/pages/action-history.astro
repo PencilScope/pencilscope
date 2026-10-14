@@ -1,0 +1,133 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/action-history");
+const requestedStatus = Astro.url.searchParams.get("status");
+const status = requestedStatus === "archived" || requestedStatus === "deleted" ? requestedStatus : "active";
+const category = Astro.url.searchParams.get("category") ?? "all";
+const query = Astro.url.searchParams.get("q") ?? "";
+const response = await requestApi(`/api/action-history?status=${encodeURIComponent(status)}&category=${encodeURIComponent(category)}&q=${encodeURIComponent(query)}&limit=100`, { userId });
+if (response.status === 401) return Astro.redirect("/sign-in?next=/action-history");
+type HistoryEvent = {
+  id: string; action: string; label: string; category: string; entityType: string;
+  entityId: string | null; metadata: Record<string, unknown>; occurredAt: string;
+  state: "active" | "archived" | "deleted"; archiveId: string | null; canDelete: boolean;
+};
+type Archive = { id: string; event_count: number; first_event_at: string; last_event_at: string; size_bytes: number; created_at: string };
+const payload = response.ok ? await response.json<{ events: HistoryEvent[]; archives: Archive[]; retentionNotice: string }>() : { events: [], archives: [], retentionNotice: "History is temporarily unavailable." };
+const categories = [
+  ["all", "All activity"], ["security", "Security"], ["learning", "Learning"],
+  ["creation", "Creation"], ["network", "Network"], ["billing", "Billing"], ["account", "Account"]
+];
+const categoryIcons: Record<string, string> = {
+  security: "⌾", learning: "◫", creation: "✎", network: "◎", billing: "$", account: "◇"
+};
+const dateTime = (value: string) => new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+const metadataSummary = (event: HistoryEvent) => {
+  const entries = Object.entries(event.metadata).filter(([, value]) => ["string", "number", "boolean"].includes(typeof value)).slice(0, 3);
+  return entries.map(([key, value]) => `${key.replaceAll(/([A-Z_])/g, " $1").toLowerCase()}: ${String(value)}`).join(" · ");
+};
+---
+<BaseLayout title="Action history — PencilScope" description="Review, archive and manage your PencilScope account activity.">
+  <section class="dashboard-hero compact-hero action-history-hero"><div class="shell">
+    <a class="back-link" href="/profile">← Profile</a>
+    <span class="eyebrow">Security & privacy</span>
+    <h1>Action history</h1>
+    <p>Review meaningful activity across your learning, creations, payments and account. Archived records are protected in private cloud storage.</p>
+  </div></section>
+
+  <section class="shell action-history-layout">
+    <aside class="action-history-sidebar panel" aria-label="Action history sections">
+      <strong>History</strong>
+      <a class:list={{ active: status === "active" }} href="/action-history?status=active">Recent activity</a>
+      <a class:list={{ active: status === "archived" }} href="/action-history?status=archived">Archived</a>
+      <a class:list={{ active: status === "deleted" }} href="/action-history?status=deleted">Deleted</a>
+      <div class="history-privacy-note"><span aria-hidden="true">▣</span><p><strong>Private by design</strong><small>Only you can view this page. Sensitive values and message contents are never shown.</small></p></div>
+    </aside>
+
+    <div class="action-history-content">
+      <form class="history-toolbar panel" method="get">
+        <input type="hidden" name="status" value={status} />
+        <label><span>Search history</span><input type="search" name="q" value={query} placeholder="Search action or product ID" /></label>
+        <label><span>Category</span><select name="category">{categories.map(([value, label]) => <option value={value} selected={category === value}>{label}</option>)}</select></label>
+        <button class="button button-small" type="submit">Filter</button>
+      </form>
+
+      {status === "archived" && payload.archives.length > 0 && <section class="history-archive-summary" aria-label="R2 archive summary">
+        <span aria-hidden="true">☁</span><p><strong>{payload.archives.length} protected archive{payload.archives.length === 1 ? "" : "s"}</strong><small>{payload.archives.reduce((sum, item) => sum + Number(item.event_count), 0)} events stored as compressed, checksum-verified files.</small></p>
+      </section>}
+
+      <div class="history-bulk-bar" hidden data-history-bulk>
+        <label><input type="checkbox" data-select-all /> Select all</label>
+        <span><b data-selected-count>0</b> selected</span>
+        {status === "active" && <button class="button button-small button-secondary" type="button" data-history-action="archive">Archive</button>}
+        {status === "archived" && <button class="button button-small button-secondary" type="button" data-history-action="restore">Restore</button>}
+        {status === "deleted" && <button class="button button-small button-secondary" type="button" data-history-action="restore">Recover</button>}
+        {status === "active" && <button class="button button-small button-danger" type="button" data-history-action="delete">Delete eligible</button>}
+      </div>
+      <p class="form-error history-feedback" hidden data-history-error></p>
+      <p class="form-success history-feedback" hidden data-history-success></p>
+
+      {payload.events.length ? <section class="history-list" aria-label={`${status} action history`}>
+        {payload.events.map((event) => <article class="history-event panel" data-history-event data-can-delete={String(event.canDelete)}>
+          <label class="history-select"><input type="checkbox" value={event.id} data-history-select /><span class="sr-only">Select {event.label}</span></label>
+          <span class:list={["history-event-icon", `history-${event.category}`]} aria-hidden="true">{categoryIcons[event.category] ?? "◇"}</span>
+          <div class="history-event-copy">
+            <div><strong>{event.label}</strong><span class:list={["history-category", `history-category-${event.category}`]}>{event.category}</span>{!event.canDelete && <span class="history-retained" title="This record can be archived but must be retained">Retained</span>}</div>
+            <p>{event.entityType.replaceAll("_", " ")}{event.entityId ? ` · ${event.entityId}` : ""}</p>
+            {metadataSummary(event) && <small>{metadataSummary(event)}</small>}
+          </div>
+          <time datetime={event.occurredAt}>{dateTime(event.occurredAt)}</time>
+        </article>)}
+      </section> : <section class="panel history-empty"><span aria-hidden="true">✓</span><h2>No {status} activity</h2><p>{status === "active" ? "New account, learning and creation actions will appear here." : status === "archived" ? "Select recent activity and archive it when you want a quieter timeline." : "Eligible deleted items remain recoverable from this section."}</p></section>}
+
+      <section class="history-retention panel"><span aria-hidden="true">i</span><div><strong>Some records must be retained</strong><p>{payload.retentionNotice}</p></div></section>
+    </div>
+  </section>
+</BaseLayout>
+
+<script>
+  const selected = () => [...document.querySelectorAll<HTMLInputElement>("[data-history-select]:checked")].map((input) => input.value);
+  const bulk = document.querySelector<HTMLElement>("[data-history-bulk]");
+  const count = document.querySelector<HTMLElement>("[data-selected-count]");
+  const selectAll = document.querySelector<HTMLInputElement>("[data-select-all]");
+  const error = document.querySelector<HTMLElement>("[data-history-error]");
+  const success = document.querySelector<HTMLElement>("[data-history-success]");
+  const update = () => {
+    const total = selected().length;
+    if (bulk) bulk.hidden = document.querySelectorAll("[data-history-select]").length === 0;
+    if (count) count.textContent = String(total);
+    if (selectAll) {
+      const available = document.querySelectorAll("[data-history-select]").length;
+      selectAll.checked = available > 0 && total === available;
+      selectAll.indeterminate = total > 0 && total < available;
+    }
+  };
+  document.querySelectorAll<HTMLInputElement>("[data-history-select]").forEach((input) => input.addEventListener("change", update));
+  selectAll?.addEventListener("change", () => {
+    document.querySelectorAll<HTMLInputElement>("[data-history-select]").forEach((input) => { input.checked = Boolean(selectAll.checked); });
+    update();
+  });
+  document.querySelectorAll<HTMLButtonElement>("[data-history-action]").forEach((button) => button.addEventListener("click", async () => {
+    const ids = selected();
+    if (!ids.length) { if (error) { error.textContent = "Choose at least one history item."; error.hidden = false; } return; }
+    const action = button.dataset.historyAction;
+    if (action === "delete" && !window.confirm("Delete the eligible selected history items? Protected records will not be removed.")) return;
+    button.disabled = true;
+    if (error) error.hidden = true;
+    if (success) success.hidden = true;
+    try {
+      const response = await fetch(`/api/action-history/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids }) });
+      const result = await response.json() as { error?: { message?: string } };
+      if (!response.ok) throw new Error(result.error?.message ?? "The history action could not be completed.");
+      if (success) { success.textContent = action === "archive" ? "History archived securely." : action === "restore" ? "History restored." : "Eligible history deleted."; success.hidden = false; }
+      window.setTimeout(() => window.location.reload(), 450);
+    } catch (reason) {
+      if (error) { error.textContent = reason instanceof Error ? reason.message : "The history action could not be completed."; error.hidden = false; }
+      button.disabled = false;
+    }
+  }));
+  update();
+</script>

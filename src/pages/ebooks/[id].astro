@@ -1,0 +1,32 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const ebookId = Astro.params.id ?? "";
+const response = await requestApi(`/api/ebooks/${encodeURIComponent(ebookId)}`);
+if (!response.ok) return Astro.redirect("/404");
+const data = await response.json<{
+  ebook: { id: string; title: string; subtitle: string; description: string; subject: string; audience: string; creator_name: string; current_version: number };
+  chapters: Array<{ id: string; title: string; content_json: string; position: number }>;
+}>();
+const blocks = (content: string) => {
+  try { return (JSON.parse(content) as { blocks?: Array<{ type: string; text: string }> }).blocks ?? []; }
+  catch { return []; }
+};
+---
+<BaseLayout title={`${data.ebook.title} — PencilScope`} description={data.ebook.description} socialType="article">
+  <section class="ebook-reader-hero"><div class="shell"><a class="back-link" href="/library">← Learning library</a><span class="eyebrow">{data.ebook.subject} · Ebook</span><h1>{data.ebook.title}</h1>{data.ebook.subtitle && <h2>{data.ebook.subtitle}</h2>}<p>{data.ebook.description}</p><small>By {data.ebook.creator_name} · Version {data.ebook.current_version}</small></div></section>
+  <section class="shell ebook-reader-layout">
+    <aside class="ebook-toc"><strong>Contents</strong>{data.chapters.map((chapter) => <a href={`#chapter-${chapter.id}`}><span>{String(chapter.position).padStart(2, "0")}</span>{chapter.title}</a>)}</aside>
+    <article class="ebook-reader"><div class="reader-controls"><button type="button" data-size="-1">A−</button><button type="button" data-size="1">A＋</button><button type="button" data-theme>Reading theme</button></div>{data.chapters.map((chapter) => <section id={`chapter-${chapter.id}`}><span class="eyebrow">Chapter {chapter.position}</span><h2>{chapter.title}</h2>{blocks(chapter.content_json).map((block) => <p>{block.text}</p>)}</section>)}</article>
+  </section>
+</BaseLayout>
+<script>
+  const reader = document.querySelector<HTMLElement>(".ebook-reader");
+  let scale = 1;
+  document.querySelectorAll<HTMLButtonElement>("[data-size]").forEach((button) => button.addEventListener("click", () => {
+    scale = Math.min(1.35, Math.max(.85, scale + Number(button.dataset.size) * .1));
+    reader?.style.setProperty("--reader-scale", String(scale));
+  }));
+  document.querySelector("[data-theme]")?.addEventListener("click", () => reader?.classList.toggle("reader-sepia"));
+</script>

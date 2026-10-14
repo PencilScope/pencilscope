@@ -1,0 +1,141 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in");
+
+const requestedNext = Astro.url.searchParams.get("next");
+const next = requestedNext?.startsWith("/") && !requestedNext.startsWith("//") ? requestedNext : "/dashboard";
+const response = await requestApi("/api/onboarding", { userId });
+if (response.status === 401) return Astro.redirect("/sign-in");
+if (!response.ok) return Astro.redirect(next);
+
+const data = await response.json<{
+  profile: { countryCode: string | null; phoneE164: string | null };
+  contacts: Array<{
+    id: string; contact_type: "mobile" | "email"; label: string;
+    contact_value: string; is_primary: number; verified_at: string | null;
+  }>;
+  categories: Array<{ slug: string; title: string; description: string; selected: boolean }>;
+}>();
+const error = Astro.url.searchParams.get("error");
+
+const countries = [
+  ["SG", "Singapore"], ["MY", "Malaysia"], ["ID", "Indonesia"], ["PH", "Philippines"],
+  ["TH", "Thailand"], ["VN", "Vietnam"], ["BN", "Brunei"], ["KH", "Cambodia"],
+  ["IN", "India"], ["CN", "China"], ["HK", "Hong Kong"], ["TW", "Taiwan"],
+  ["JP", "Japan"], ["KR", "South Korea"], ["AU", "Australia"], ["NZ", "New Zealand"],
+  ["GB", "United Kingdom"], ["US", "United States"], ["CA", "Canada"], ["AE", "United Arab Emirates"]
+] as const;
+const diallingCodes = [
+  ["+65", "Singapore (+65)"], ["+60", "Malaysia (+60)"], ["+62", "Indonesia (+62)"],
+  ["+63", "Philippines (+63)"], ["+66", "Thailand (+66)"], ["+84", "Vietnam (+84)"],
+  ["+673", "Brunei (+673)"], ["+855", "Cambodia (+855)"], ["+91", "India (+91)"],
+  ["+86", "China (+86)"], ["+852", "Hong Kong (+852)"], ["+886", "Taiwan (+886)"],
+  ["+81", "Japan (+81)"], ["+82", "South Korea (+82)"], ["+61", "Australia (+61)"],
+  ["+64", "New Zealand (+64)"], ["+44", "United Kingdom (+44)"],
+  ["+1", "United States / Canada (+1)"], ["+971", "United Arab Emirates (+971)"]
+] as const;
+---
+<BaseLayout title="Personalise your account — PencilScope">
+  <section class="auth-shell onboarding-shell shell">
+    <div class="auth-card onboarding-card">
+      <span class="eyebrow">One more step</span>
+      <h1>Personalise your experience</h1>
+      <p>Manage your contacts and choose the topics you want to discover.</p>
+      {error && <p class="form-error" role="alert">{error}</p>}
+      <section class="preference-contacts">
+        <div class="preference-section-heading"><div><span class="eyebrow">Contacts</span><h2>Your contact details</h2><p>Add another contact without replacing the ones already saved.</p></div></div>
+        <div class="contact-list">{data.contacts.map((contact) => <article><div><strong>{contact.label}</strong><small>{contact.contact_type} · {contact.contact_value}{contact.is_primary ? " · primary" : ""}</small></div><button class="text-link danger-link remove-contact" type="button" data-id={contact.id}>Remove</button></article>)}</div>
+        {!data.contacts.length && <p class="form-message">No contacts saved yet.</p>}
+        <details class="add-contact-panel"><summary class="button button-small button-secondary">+ Add new contact</summary><form class="stack-form add-contact-form"><div class="form-columns"><label>Contact type<select name="contactType"><option value="mobile">Mobile</option><option value="email">Email</option></select></label><label>Label<input name="label" minlength="2" maxlength="40" value="Personal" required /></label></div><div class="mobile-contact-fields form-columns"><label>Calling code<select name="diallingCode">{diallingCodes.map(([code, name]) => <option value={code}>{name}</option>)}</select></label><label>Mobile number<input name="contactValue" type="tel" inputmode="tel" placeholder="9123 4567" /></label></div><label class="email-contact-field" hidden>Email address<input name="emailValue" type="email" autocomplete="email" /></label><label class="contact-primary"><input name="isPrimary" type="checkbox" value="true" /> Use as my primary contact</label><button class="button button-small" type="submit">Add contact</button><p class="form-message" aria-live="polite"></p></form></details>
+      </section>
+      <form class="stack-form" action="/api/profile/onboarding" method="post">
+        <input type="hidden" name="next" value={next} />
+        <label>
+          Country or region
+          <select name="countryCode" required autocomplete="country">
+            {countries.map(([code, name]) => <option value={code} selected={(data.profile.countryCode ?? "SG") === code}>{name}</option>)}
+          </select>
+        </label>
+        <fieldset class="interest-fields">
+          <legend>Your interests <small>Select between 3 and 10</small></legend>
+          <p class="interest-selection-count" data-interest-count aria-live="polite"></p>
+          <div class="interest-grid">
+            {data.categories.map((category) => (
+              <label class="interest-option">
+                <input type="checkbox" name="interestSlugs" value={category.slug} checked={category.selected} />
+                <span><strong>{category.title}</strong><small>{category.description}</small></span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+        <p class="privacy-note">We use these details to personalise course discovery and service messages. See our <a href="/privacy">privacy information</a>.</p>
+        <button class="button button-full" type="submit">Save and continue</button>
+      </form>
+      <a class="text-link" href={next}>Skip for now</a>
+    </div>
+  </section>
+</BaseLayout>
+
+<script>
+  const interestInputs = [...document.querySelectorAll<HTMLInputElement>('input[name="interestSlugs"]')];
+  const preferenceForm = interestInputs[0]?.closest<HTMLFormElement>("form");
+  const countMessage = document.querySelector<HTMLElement>("[data-interest-count]");
+  const updateInterestCount = () => {
+    const count = interestInputs.filter((input) => input.checked).length;
+    if (countMessage) {
+      countMessage.textContent = `${count} of 10 selected${count < 3 ? ` · choose ${3 - count} more` : ""}`;
+      countMessage.classList.toggle("ready", count >= 3 && count <= 10);
+      countMessage.classList.remove("form-error");
+    }
+    interestInputs.forEach((input) => { input.disabled = !input.checked && count >= 10; });
+  };
+  interestInputs.forEach((input) => input.addEventListener("change", updateInterestCount));
+  preferenceForm?.addEventListener("submit", (event) => {
+    const count = interestInputs.filter((input) => input.checked).length;
+    if (count >= 3 && count <= 10) return;
+    event.preventDefault();
+    countMessage?.scrollIntoView({ behavior: "smooth", block: "center" });
+    countMessage?.classList.add("form-error");
+  });
+  updateInterestCount();
+
+  const addContactForm = document.querySelector<HTMLFormElement>(".add-contact-form");
+  const contactType = addContactForm?.querySelector('[name="contactType"]') as HTMLSelectElement | null | undefined;
+  const mobileFields = document.querySelector<HTMLElement>(".mobile-contact-fields");
+  const emailField = document.querySelector<HTMLElement>(".email-contact-field");
+  const toggleContactType = () => {
+    const email = contactType?.value === "email";
+    if (mobileFields) mobileFields.hidden = email;
+    if (emailField) emailField.hidden = !email;
+  };
+  contactType?.addEventListener("change", toggleContactType);
+  toggleContactType();
+  addContactForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const values = new FormData(addContactForm);
+    const message = addContactForm.querySelector<HTMLElement>(".form-message");
+    const button = addContactForm.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (button) button.disabled = true;
+    if (message) { message.className = "form-message"; message.textContent = "Adding contact…"; }
+    const type = String(values.get("contactType"));
+    const response = await fetch("/api/profile/contacts", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ contactType: type, label: values.get("label"), diallingCode: values.get("diallingCode"), contactValue: type === "email" ? values.get("emailValue") : values.get("contactValue"), isPrimary: values.get("isPrimary") === "true" })
+    });
+    const result = await response.json() as { error?: { message?: string } };
+    if (!response.ok) {
+      if (message) { message.className = "form-error"; message.textContent = result.error?.message ?? "Contact could not be added."; }
+      if (button) button.disabled = false;
+      return;
+    }
+    location.reload();
+  });
+  document.querySelectorAll<HTMLButtonElement>(".remove-contact").forEach((button) => button.addEventListener("click", async () => {
+    if (!window.confirm("Remove this contact?")) return;
+    const response = await fetch(`/api/profile/contacts/${encodeURIComponent(button.dataset.id ?? "")}`, { method: "DELETE" });
+    if (response.ok) location.reload();
+  }));
+</script>

@@ -2,6 +2,7 @@
 import BaseLayout from "@/layouts/BaseLayout.astro";
 import { findCourseBySlug, requestApi } from "@/lib/api-client";
 import { formatPrice } from "@/lib/courses";
+import { learningProductMeta, type LearningProductType } from "@/lib/learning-products";
 const course = await findCourseBySlug(Astro.params.slug ?? "");
 if (!course) return Astro.redirect("/404");
 const offeringsResponse = await requestApi(`/api/courses/${encodeURIComponent(course.slug)}/offerings`);
@@ -15,53 +16,202 @@ const offeringData = offeringsResponse.ok ? await offeringsResponse.json<{
     capacity: number | null;
     has_online_course: number; has_materials: number; has_quizzes: number;
     has_tests: number; has_mock_exams: number;
+    online_class_count: number; in_person_class_count: number; ebook_count: number;
+    reading_count: number; video_count: number; audio_count: number;
   }>;
-}>() : { offerings: [] };
+  learningProducts: Array<{
+    course_offering_id: string; id: string; slug: string; title: string;
+    product_type: LearningProductType; description: string; estimated_minutes: number | null;
+  }>;
+  syllabus: {
+    modules: Array<{
+      id: string; title: string; position: number;
+      lessons: Array<{ id: string; title: string; lesson_type: string; estimated_minutes: number | null; position: number }>;
+    }>;
+    assessments: Array<{ id: string; title: string; assessment_type: string; time_limit_seconds: number | null }>;
+    materials: Array<{
+      id: string; title: string; description: string; material_type: string;
+      resource_kind: string; content_kind: string;
+    }>;
+    flashcardDecks: Array<{ id: string; title: string; description: string; card_count: number }>;
+  };
+}>() : {
+  offerings: [],
+  learningProducts: [],
+  syllabus: { modules: [], assessments: [], materials: [], flashcardDecks: [] }
+};
 const offerings = offeringData.offerings;
+const learningProducts = offeringData.learningProducts;
+const syllabus = offeringData.syllabus;
+const publishedContentCount = syllabus.modules.reduce((count, module) => count + module.lessons.length, 0)
+  + syllabus.assessments.length + syllabus.materials.length + syllabus.flashcardDecks.length;
 const bookableOfferings = offerings.filter((offering) => offering.pricing_status === "ready");
-const lowestPrice = offerings.length
-  ? Math.min(...offerings.map((offering) => offering.price_cents))
+const pricedOfferings = bookableOfferings.length ? bookableOfferings : offerings;
+const lowestPrice = pricedOfferings.length
+  ? Math.min(...pricedOfferings.map((offering) => offering.price_cents))
   : course.priceCents;
+const offeringItemCount = (offering: typeof offerings[number]) =>
+  offering.online_class_count + offering.in_person_class_count + offering.ebook_count
+  + offering.reading_count + offering.video_count + offering.audio_count
+  + offering.has_quizzes + offering.has_tests + offering.has_mock_exams;
 const userId = await Astro.session?.get("userId");
-let viewer: {
-  id: string;
-  accountType: "individual" | "organization";
-  students: Array<{ id: string; display_name: string; primary_level: string | null }>;
-} | null = null;
+let viewer: { id: string } | null = null;
+let activeEnrolment: { id: string; status: string; course_offering_id: string } | null = null;
 if (typeof userId === "string") {
   const dashboard = await requestApi("/api/dashboard", { userId });
   if (dashboard.ok) {
     const data = await dashboard.json<{
-      user: { id: string; account_type: "individual" | "organization" };
-      students?: Array<{ id: string; display_name: string; primary_level: string | null }>;
+      user: { id: string };
+      enrolments?: Array<{ id: string; course_id: string; course_offering_id: string; status: string }>;
     }>();
-    viewer = { id: data.user.id, accountType: data.user.account_type, students: data.students ?? [] };
+    viewer = { id: data.user.id };
+    activeEnrolment = data.enrolments?.find((enrolment) =>
+      enrolment.course_id === course.id && ["active", "completed"].includes(enrolment.status)
+    ) ?? null;
   }
 }
 const checkoutMessage = Astro.url.searchParams.get("error");
 const checkoutSuccess = Astro.url.searchParams.get("checkout") === "success";
+const checkoutSessionId = Astro.url.searchParams.get("session_id") ?? "";
+const alreadyHasAccess = Boolean(activeEnrolment);
+const shareUrl = `${Astro.url.origin}/courses/${encodeURIComponent(course.slug)}`;
+const shareText = `Discover ${course.title} on PencilScope`;
+const encodedShareUrl = encodeURIComponent(shareUrl);
+const encodedShareText = encodeURIComponent(shareText);
+const contentLabel = (value: string) => value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 ---
 
-<BaseLayout title={`${course.title} — PencilScope`} description={course.description}>
+<BaseLayout
+  title={`${course.title} — PencilScope`}
+  description={course.description}
+  canonicalUrl={shareUrl}
+  socialType="article"
+>
   <section class="course-detail-hero">
     <div class="shell detail-grid">
-      <div><a class="back-link" href="/courses">← All courses</a><div class="detail-tags">{course.categories.map((category) => <span>{category}</span>)}<span>{course.subject}</span><span>{course.level}</span><span>{course.deliveryMode}</span></div><h1>{course.title}</h1><p>{course.description}</p><div class="tutor-line"><span class="tutor-avatar">{course.tutorName.split(" ").at(-1)?.slice(0, 1)}</span><span>Created by <strong>{course.tutorName}</strong></span></div></div>
-      <aside class="enrol-card"><div class={`enrol-art accent-${course.accent}`}><span>{course.subject.slice(0, 1)}</span></div><div class="enrol-body"><span class="price-label">{offerings.length > 1 ? "Access from" : "Course access"}</span><strong class="detail-price">{formatPrice(lowestPrice, course.currency)}</strong><ul><li>Recorded, live online or in-person delivery</li><li>Materials and knowledge checks</li><li>Progress visible from the dashboard</li><li>Secure access to the purchased offering</li></ul>
-        {checkoutMessage && <p class="form-error">{checkoutMessage}</p>}
-        {checkoutSuccess && <p class="form-success">Payment received. Course access will appear on your dashboard as soon as Stripe confirms it.</p>}
-        {!viewer && <a class="button button-full" href={`/sign-in?next=/courses/${course.slug}`}>Sign in to enrol</a>}
-        {bookableOfferings.length === 0 && <p class="form-message">No offering is currently open for enrolment.</p>}
-        {bookableOfferings.length > 0 && viewer?.accountType === "individual" && <form class="stack-form checkout-form" action="/api/checkout" method="post">
+      <div><a class="back-link" href="/courses">← All courses</a><div class="detail-tags">{course.categories.map((category) => <span>{category}</span>)}<span>{course.subject}</span><span>{course.level}</span><span>{course.deliveryMode}</span></div><h1>{course.title}</h1><p>{course.description}</p><div class="tutor-line"><span class="tutor-avatar">{course.tutorName.split(" ").at(-1)?.slice(0, 1)}</span><span>Created by <strong>{course.tutorName}</strong></span></div>
+        <div class="course-share" data-share-url={shareUrl} data-share-title={course.title}>
+          <span>Share this course</span>
+          <div>
+            <button class="share-chip share-native" type="button">Share</button>
+            <a class="share-chip" href={`https://wa.me/?text=${encodedShareText}%20${encodedShareUrl}`} target="_blank" rel="noopener noreferrer nofollow">WhatsApp</a>
+            <a class="share-chip" href={`https://www.facebook.com/sharer/sharer.php?u=${encodedShareUrl}`} target="_blank" rel="noopener noreferrer nofollow">Facebook</a>
+            <a class="share-chip" href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedShareUrl}`} target="_blank" rel="noopener noreferrer nofollow">LinkedIn</a>
+            <a class="share-chip" href={`https://twitter.com/intent/tweet?text=${encodedShareText}&url=${encodedShareUrl}`} target="_blank" rel="noopener noreferrer nofollow">X</a>
+            <a class="share-chip" href={`mailto:?subject=${encodedShareText}&body=${encodedShareText}%0A%0A${encodedShareUrl}`}>Email</a>
+            <button class="share-chip share-copy" type="button">Copy link</button>
+          </div>
+          <small class="share-status" aria-live="polite"></small>
+        </div>
+      </div>
+      <aside class="enrol-card"><div class={`enrol-art accent-${course.accent}`}>{course.coverAssetId ? <img class="course-detail-cover" src={`/api/media/${course.coverAssetId}`} alt={`${course.title} cover`} /> : <span>{course.subject.slice(0, 1)}</span>}</div><div class="enrol-body"><span class="price-label">{offerings.length > 1 ? "Access from" : "Course access"}</span><strong class="detail-price">{formatPrice(lowestPrice, course.currency)}</strong><ul><li>Recorded, live online or in-person delivery</li><li>Materials and knowledge checks</li><li>Progress visible from the dashboard</li><li>Secure access to the purchased offering</li></ul>
+        {checkoutMessage && !alreadyHasAccess && <p class="form-error">{checkoutMessage}</p>}
+        {alreadyHasAccess && !checkoutSuccess && <p class="form-success">You already have access to this course.</p>}
+        {checkoutSuccess && <div class="checkout-confirmation checkout-pending" data-checkout-session={checkoutSessionId}><span class="checkout-spinner" aria-hidden="true"></span><div><strong>Payment received</strong><p data-checkout-message>Finalising your enrolment and adding the products to My Learning…</p></div></div>}
+        {alreadyHasAccess && !checkoutSuccess && <a class="button button-full" href={`/learn/${course.id}`}>Continue learning</a>}
+        {!viewer && bookableOfferings.length > 0 && <a class="button button-full" href={`/sign-in?next=/courses/${course.slug}`}>Sign in to enrol</a>}
+        {bookableOfferings.length === 0 && !alreadyHasAccess && <p class="enrolment-notice"><strong>Enrolment is not open yet.</strong><span>This course is published and its syllabus is available below. The creator is still preparing learner access.</span></p>}
+        {bookableOfferings.length > 0 && viewer && !alreadyHasAccess && !checkoutSuccess && <form class="stack-form checkout-form offering-checkout" action="/api/checkout" method="post">
           <input type="hidden" name="courseId" value={course.id} /><input type="hidden" name="returnTo" value={`/courses/${course.slug}`} />
-          <label>Course offering<select name="offeringId" required>{bookableOfferings.map((offering) => <option value={offering.id}>{offering.title} · {formatPrice(offering.price_cents, offering.currency)}</option>)}</select></label>
-          <label>Access for<select name="studentId" required><option value={viewer.id}>Myself</option>{viewer.students.map((student) => <option value={student.id}>{student.display_name} · {student.primary_level}</option>)}</select></label>
+          <fieldset class="enrol-offering-picker"><legend>Choose your learning offer</legend>{bookableOfferings.map((offering, index) => <label class="enrol-offering-option"><input type="radio" name="offeringId" value={offering.id} checked={index === 0} required data-title={offering.title} data-price={formatPrice(offering.price_cents, offering.currency)} data-items={offeringItemCount(offering)} /><span><small>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</small><strong>{offering.title}</strong><em>{offering.starts_at ? new Date(offering.starts_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" }) : "Start when you are ready"}</em><i>{offeringItemCount(offering)} included learning item{offeringItemCount(offering) === 1 ? "" : "s"}{offering.capacity ? ` · ${offering.capacity} places` : ""}</i></span><b>{formatPrice(offering.price_cents, offering.currency)}</b></label>)}</fieldset>
+          <input type="hidden" name="studentId" value={viewer.id} />
+          <div class="checkout-order-summary"><span><small>Your selection</small><strong data-checkout-offer>{bookableOfferings[0]?.title}</strong></span><span><small>Total payable</small><strong data-checkout-total>{bookableOfferings[0] ? formatPrice(bookableOfferings[0].price_cents, bookableOfferings[0].currency) : "—"}</strong></span></div>
           <button class="button button-full" type="submit">Continue to secure checkout</button>
         </form>}
-        {viewer?.accountType === "organization" && <p class="form-message">Use an Individual account to purchase learner access.</p>}
-        <small>Secure checkout powered by Stripe</small></div></aside>
+        {!alreadyHasAccess && <small>Secure checkout powered by Stripe</small>}</div></aside>
     </div>
   </section>
-  <section class="shell detail-content"><article><span class="eyebrow">Available offerings</span><h2>Choose how and when to learn</h2>
-    <div class="term-grid">{offerings.map((offering) => <section class="term-card"><span>{offering.offering_type === "academic_term" ? `${offering.academic_year} · Term ${offering.term_number}` : offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{formatPrice(offering.price_cents, offering.currency)}</strong>{offering.starts_at && <p>{new Date(offering.starts_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" })}</p>}<div class="feature-pills">{offering.has_online_course ? <small>Course lessons</small> : null}{offering.has_materials ? <small>Materials</small> : null}{offering.has_quizzes ? <small>Quizzes</small> : null}{offering.has_tests ? <small>Tests</small> : null}{offering.has_mock_exams ? <small>Mock exams</small> : null}{offering.capacity ? <small>{offering.capacity} places</small> : null}{offering.pricing_status !== "ready" ? <small>Booking opens soon</small> : null}</div></section>)}</div>
+  <section class="shell detail-content"><article>
+    <section class="course-syllabus">
+      <span class="eyebrow">Course contents</span><h2>See what you will learn</h2>
+      <p>Preview the published syllabus before enrolling. Lesson content, downloads, answers and attempts unlock with your booking.</p>
+      {publishedContentCount > 0 ? <div class="syllabus-stack">
+        {syllabus.modules.map((module) => <section class="syllabus-module">
+          <header><span>Module {module.position}</span><h3>{module.title}</h3><small>{module.lessons.length} lesson{module.lessons.length === 1 ? "" : "s"}</small></header>
+          {module.lessons.length > 0
+            ? <ul>{module.lessons.map((lesson) => <li><span class="content-kind">{contentLabel(lesson.lesson_type)}</span><strong>{lesson.title}</strong><small>{lesson.estimated_minutes ? `${lesson.estimated_minutes} min` : "Included with enrolment"} · Locked</small></li>)}</ul>
+            : <p class="syllabus-empty">Lessons are being prepared.</p>}
+        </section>)}
+        {(syllabus.assessments.length > 0 || syllabus.materials.length > 0 || syllabus.flashcardDecks.length > 0) && <div class="syllabus-extras">
+          {syllabus.assessments.map((item) => <section><span>Assessment</span><h3>{item.title}</h3><small>{contentLabel(item.assessment_type)}{item.time_limit_seconds ? ` · ${Math.ceil(item.time_limit_seconds / 60)} min` : ""} · Locked</small></section>)}
+          {syllabus.materials.map((item) => <section><span>Resource</span><h3>{item.title}</h3><small>{contentLabel(item.content_kind || item.resource_kind || item.material_type)} · Locked</small></section>)}
+          {syllabus.flashcardDecks.map((item) => <section><span>Practice</span><h3>{item.title}</h3><small>{item.card_count} flashcard{item.card_count === 1 ? "" : "s"} · Locked</small></section>)}
+        </div>}
+      </div> : <p class="syllabus-empty">The creator has not published a syllabus yet.</p>}
+    </section>
+    <section class="course-offerings">
+      <span class="eyebrow">Available offerings</span><h2>Choose how and when to learn</h2>
+      {offerings.length > 0 ? <div class="term-grid">{offerings.map((offering) => {
+        const includedProducts = learningProducts.filter((product) => product.course_offering_id === offering.id);
+        return <section class="term-card"><span>{offering.offering_type === "academic_term" ? `${offering.academic_year} · Term ${offering.term_number}` : offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{formatPrice(offering.price_cents, offering.currency)}</strong>{offering.starts_at && <p>{new Date(offering.starts_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" })}</p>}<div class="feature-pills">{offering.online_class_count ? <small>{offering.online_class_count} online class(es)</small> : null}{offering.in_person_class_count ? <small>{offering.in_person_class_count} in-person class(es)</small> : null}{offering.video_count ? <small>{offering.video_count} video(s)</small> : null}{offering.audio_count ? <small>{offering.audio_count} audio item(s)</small> : null}{offering.ebook_count ? <small>{offering.ebook_count} ebook(s)</small> : null}{offering.reading_count ? <small>{offering.reading_count} reading(s)</small> : null}{offering.has_online_course ? <small>Course lessons</small> : null}{offering.has_quizzes ? <small>Quizzes</small> : null}{offering.has_tests ? <small>Tests</small> : null}{offering.has_mock_exams ? <small>Mock exams</small> : null}{offering.capacity ? <small>{offering.capacity} places</small> : null}{offering.pricing_status !== "ready" ? <small>Booking opens soon</small> : null}</div>
+          {includedProducts.length > 0 && <div class="included-product-list"><strong>Included from the learning library</strong>{includedProducts.map((product) => <a href={`/library/${product.slug}`}><span>{learningProductMeta[product.product_type].symbol}</span><div><b>{product.title}</b><small>{learningProductMeta[product.product_type].label}{product.estimated_minutes ? ` · ${product.estimated_minutes} min` : ""}</small></div><i>View →</i></a>)}</div>}
+        </section>;
+      })}</div> : <p class="offering-empty"><strong>Enrolment is being prepared.</strong><span>The published syllabus remains available above.</span></p>}
+    </section>
   </article><aside><strong>Access matched to your booking</strong><p>Each purchase unlocks the lessons, sessions, materials and assessments included in that offering.</p></aside></section>
+  <script>
+    const sharePanel = document.querySelector<HTMLElement>(".course-share");
+    const shareUrl = sharePanel?.dataset.shareUrl ?? location.href;
+    const shareTitle = sharePanel?.dataset.shareTitle ?? document.title;
+    const status = sharePanel?.querySelector<HTMLElement>(".share-status");
+    sharePanel?.querySelector<HTMLButtonElement>(".share-native")?.addEventListener("click", async () => {
+      if ("share" in navigator) {
+        try {
+          await navigator.share({ title: shareTitle, text: `Discover ${shareTitle} on PencilScope`, url: shareUrl });
+          if (status) status.textContent = "Share panel opened.";
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+        }
+      }
+      await navigator.clipboard.writeText(shareUrl);
+      if (status) status.textContent = "Course link copied.";
+    });
+    sharePanel?.querySelector<HTMLButtonElement>(".share-copy")?.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(shareUrl);
+      if (status) status.textContent = "Course link copied.";
+    });
+
+    const offerInputs = [...document.querySelectorAll<HTMLInputElement>('.enrol-offering-option input[name="offeringId"]')];
+    const offerName = document.querySelector<HTMLElement>("[data-checkout-offer]");
+    const offerTotal = document.querySelector<HTMLElement>("[data-checkout-total]");
+    const updateOrderSummary = () => {
+      const selected = offerInputs.find((input) => input.checked);
+      document.querySelectorAll(".enrol-offering-option").forEach((option) => option.classList.toggle("selected", option.contains(selected ?? null)));
+      if (offerName) offerName.textContent = selected?.dataset.title ?? "Choose an offer";
+      if (offerTotal) offerTotal.textContent = selected?.dataset.price ?? "—";
+    };
+    offerInputs.forEach((input) => input.addEventListener("change", updateOrderSummary));
+    updateOrderSummary();
+
+    const confirmation = document.querySelector<HTMLElement>("[data-checkout-session]");
+    const checkoutSession = confirmation?.dataset.checkoutSession;
+    if (confirmation && checkoutSession) {
+      const message = confirmation.querySelector<HTMLElement>("[data-checkout-message]");
+      let attempts = 0;
+      const checkEnrolment = async () => {
+        attempts += 1;
+        try {
+          const response = await fetch(`/api/checkout/status?sessionId=${encodeURIComponent(checkoutSession)}`, { headers: { accept: "application/json" } });
+          const result = await response.json() as { status?: string; courseId?: string; courseSlug?: string; courseTitle?: string; productCount?: number };
+          if (response.ok && result.status === "confirmed" && result.courseId) {
+            confirmation.classList.remove("checkout-pending");
+            confirmation.classList.add("checkout-confirmed");
+            if (message) message.textContent = result.productCount
+              ? `${result.courseTitle ?? "Your course"} and ${result.productCount} included product${result.productCount === 1 ? "" : "s"} have been added to My Learning.`
+              : `${result.courseTitle ?? "Your course"} has been added to My Learning.`;
+            window.setTimeout(() => {
+              window.location.href = `/dashboard?workspace=learning&section=learning&enrolledCourse=${encodeURIComponent(result.courseId ?? "")}&enrolledSlug=${encodeURIComponent(result.courseSlug ?? "")}`;
+            }, 1800);
+            return;
+          }
+        } catch {
+          // Keep the learner on the safe confirmation state while the webhook completes.
+        }
+        if (attempts < 15) window.setTimeout(checkEnrolment, 1600);
+        else if (message) message.innerHTML = `Your payment is confirmed, but access is taking longer than expected. <a href="/dashboard?workspace=learning&section=learning">Check My Learning</a> or refresh this page.`;
+      };
+      checkEnrolment();
+    }
+  </script>
 </BaseLayout>

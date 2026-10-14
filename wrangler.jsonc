@@ -15,7 +15,9 @@
 	},
 	"vars": {
 		"APP_URL": "http://localhost:4321",
-		"ENVIRONMENT": "development"
+		"ENVIRONMENT": "development",
+		"FACEBOOK_GRAPH_VERSION": "v26.0",
+		"MCP_SERVER_URL": "http://localhost:8790/mcp"
 	},
 	"services": [
 		{
@@ -27,7 +29,9 @@
 		"uat": {
 			"vars": {
 				"APP_URL": "https://pencilscope-uat.rdproducts-adm1.workers.dev",
-				"ENVIRONMENT": "uat"
+				"ENVIRONMENT": "uat",
+				"FACEBOOK_GRAPH_VERSION": "v26.0",
+				"MCP_SERVER_URL": "https://pencilscope-mcp-uat.rdproducts-adm1.workers.dev/mcp"
 			},
 			"services": [
 				{
@@ -39,7 +43,9 @@
 		"production": {
 			"vars": {
 				"APP_URL": "https://pencilscope-production.rdproducts-adm1.workers.dev",
-				"ENVIRONMENT": "production"
+				"ENVIRONMENT": "production",
+				"FACEBOOK_GRAPH_VERSION": "v26.0",
+				"MCP_SERVER_URL": "https://pencilscope-mcp-production.rdproducts-adm1.workers.dev/mcp"
 			},
 			"services": [
 				{

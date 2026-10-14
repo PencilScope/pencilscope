@@ -1,0 +1,252 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/network");
+
+type Person = { id: string; displayName: string; email: string; avatarAssetId: string | null };
+type Connection = {
+  id: string;
+  status: "pending" | "accepted" | "blocked";
+  incoming: boolean;
+  other: Person;
+  sharesMyProgress: boolean;
+  canViewTheirProgress: boolean;
+  blockedByMe: boolean;
+  progress: Array<{ course_id: string; title: string; progress_percent: number }>;
+};
+type CollaborationCourse = { id: string; title: string; member_role: string };
+type CollaborationOffering = { id: string; course_id: string; title: string };
+type LastMessage = { sender_user_id: string; body: string; created_at: string; read_at: string | null };
+type ThreadSummary = { id: string; other: Person; lastMessage: LastMessage | null; unreadCount: number };
+type Message = LastMessage & { id: string; sender_name: string };
+
+const connectionResponse = await requestApi("/api/connections", { userId });
+if (connectionResponse.status === 401) return Astro.redirect("/sign-in?next=/network");
+if (!connectionResponse.ok) return Astro.redirect("/dashboard?error=Network%20is%20temporarily%20unavailable.");
+const { connections } = await connectionResponse.json<{ connections: Connection[] }>();
+
+let collaboration = { courses: [] as CollaborationCourse[], offerings: [] as CollaborationOffering[] };
+const collaborationResponse = await requestApi("/api/collaboration/options", { userId });
+if (collaborationResponse.ok) collaboration = await collaborationResponse.json<typeof collaboration>();
+
+const allowedSections = ["overview", "people", "invitations", "messages", "learners", "collaborators", "sharing", "blocked"] as const;
+type NetworkSection = typeof allowedSections[number];
+const requestedSection = Astro.url.searchParams.get("section");
+const isCreator = collaboration.courses.length > 0;
+let section: NetworkSection = allowedSections.includes(requestedSection as NetworkSection)
+  ? requestedSection as NetworkSection
+  : "overview";
+if (!isCreator && (section === "learners" || section === "collaborators")) section = "overview";
+const accepted = connections.filter((connection) => connection.status === "accepted");
+const pending = connections.filter((connection) => connection.status === "pending");
+const blocked = connections.filter((connection) => connection.status === "blocked");
+const incoming = pending.filter((connection) => connection.incoming);
+
+let threads: ThreadSummary[] = [];
+let selected: { thread: { id: string; other: Person }; messages: Message[] } | null = null;
+let selectedId: string | null = null;
+if (section === "messages" || section === "overview") {
+  const summaryResponse = await requestApi("/api/messages", { userId });
+  if (summaryResponse.ok) threads = (await summaryResponse.json<{ threads: ThreadSummary[] }>()).threads;
+  if (section === "messages") {
+    const requestedThread = Astro.url.searchParams.get("thread");
+    selectedId = threads.some((thread) => thread.id === requestedThread) ? requestedThread : threads[0]?.id ?? null;
+    if (selectedId) {
+      const response = await requestApi(`/api/messages/${encodeURIComponent(selectedId)}`, { userId });
+      if (response.ok) selected = await response.json();
+    }
+  }
+}
+
+const error = Astro.url.searchParams.get("error");
+const notice = Astro.url.searchParams.get("notice");
+const noticeText: Record<string, string> = {
+  "request-sent": "Network invitation sent.",
+  accepted: "Invitation accepted.",
+  "sharing-updated": "Progress visibility updated.",
+  "message-sent": "Message sent.",
+  blocked: "Person blocked.",
+  unblocked: "Person removed from your blocked list. You can invite them again."
+};
+const initials = (name: string) => name.split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase();
+const sectionTitle: Record<NetworkSection, string> = {
+  overview: "Network overview",
+  people: "People",
+  invitations: "Invitations",
+  messages: "Messages",
+  learners: "Learner invitations",
+  collaborators: "Course collaborators",
+  sharing: "Sharing & privacy",
+  blocked: "Blocked people"
+};
+---
+
+<BaseLayout title={`${sectionTitle[section]} — PencilScope Network`}>
+  <section class="dashboard-hero compact-hero network-hero"><div class="shell">
+    <span class="eyebrow">Private and permission-based</span>
+    <h1>My network</h1>
+    <p>Invite people you know, exchange messages, collaborate on courses and control who can view your learning progress.</p>
+  </div></section>
+
+  <section class="shell network-workspace-layout">
+    <aside class="network-sidebar" aria-label="Network navigation">
+      <div class="dashboard-nav-group"><span>Network</span><nav class="dashboard-side-links">
+        <a class:list={{ active: section === "overview" }} aria-current={section === "overview" ? "page" : undefined} href="/network?section=overview">Overview</a>
+        <a class:list={{ active: section === "people" }} aria-current={section === "people" ? "page" : undefined} href="/network?section=people">People <b>{accepted.length}</b></a>
+        <a class:list={{ active: section === "invitations" }} aria-current={section === "invitations" ? "page" : undefined} href="/network?section=invitations">Invitations {pending.length > 0 && <b>{pending.length}</b>}</a>
+        <a class:list={{ active: section === "messages" }} aria-current={section === "messages" ? "page" : undefined} href="/network?section=messages">Messages</a>
+        <a class:list={{ active: section === "sharing" }} aria-current={section === "sharing" ? "page" : undefined} href="/network?section=sharing">Sharing & privacy</a>
+        <a class:list={{ active: section === "blocked" }} aria-current={section === "blocked" ? "page" : undefined} href="/network?section=blocked">Blocked {blocked.length > 0 && <b>{blocked.length}</b>}</a>
+      </nav></div>
+      {isCreator && <div class="dashboard-nav-group"><span>Collaborate</span><nav class="dashboard-side-links">
+        <a class:list={{ active: section === "learners" }} aria-current={section === "learners" ? "page" : undefined} href="/network?section=learners">Learner invitations</a>
+        <a class:list={{ active: section === "collaborators" }} aria-current={section === "collaborators" ? "page" : undefined} href="/network?section=collaborators">Course collaborators</a>
+      </nav></div>}
+      <p class="network-privacy-note"><strong>Your network is private.</strong> Connecting never grants course, product or progress access automatically.</p>
+    </aside>
+
+    <div class="network-main">
+      {error && <p class="form-error connections-alert" role="alert">{error}</p>}
+      {notice && noticeText[notice] && <p class="form-success connections-alert">{noticeText[notice]}</p>}
+
+      {section === "overview" && <>
+        <div class="network-metric-grid">
+          <a href="/network?section=people"><strong>{accepted.length}</strong><span>People</span></a>
+          <a href="/network?section=invitations"><strong>{incoming.length}</strong><span>Awaiting you</span></a>
+          <a href="/network?section=messages"><strong>{threads.reduce((total, thread) => total + thread.unreadCount, 0)}</strong><span>Unread messages</span></a>
+          {isCreator && <a href="/network?section=collaborators"><strong>{collaboration.courses.length}</strong><span>Courses to share</span></a>}
+        </div>
+        <article class="panel network-overview-panel">
+          <div class="dashboard-section-heading"><div><span class="eyebrow">Next actions</span><h2>Grow your trusted network</h2><p>People only receive the access you explicitly grant.</p></div><a class="button button-small" href="/network?section=invitations">Invite someone</a></div>
+          <div class="network-action-grid">
+            <a href="/network?section=people"><span aria-hidden="true">◎</span><strong>People</strong><small>Message and manage accepted people.</small></a>
+            <a href="/network?section=sharing"><span aria-hidden="true">◉</span><strong>Sharing & privacy</strong><small>Choose who can see your progress.</small></a>
+            {isCreator && <a href="/network?section=learners"><span aria-hidden="true">↗</span><strong>Invite learners</strong><small>Send access to a priced course offering.</small></a>}
+            {isCreator && <a href="/network?section=collaborators"><span aria-hidden="true">✦</span><strong>Build together</strong><small>Add co-hosts, editors and course managers.</small></a>}
+          </div>
+        </article>
+        {incoming.length > 0 && <article class="panel network-overview-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Needs attention</span><h2>{incoming.length} network invitation{incoming.length === 1 ? "" : "s"}</h2></div><a class="text-link" href="/network?section=invitations">Review invitations →</a></div></article>}
+      </>}
+
+      {section === "people" && <article class="panel network-section-panel">
+        <div class="dashboard-section-heading"><div><span class="eyebrow">People</span><h2>People in your network</h2><p>Message people or open the relevant permission area.</p></div><a class="button button-small" href="/network?section=invitations">Invite someone</a></div>
+        {!accepted.length && <div class="network-empty"><h3>Your network is ready</h3><p>Invite someone you know by their exact email address.</p><a class="button button-small" href="/network?section=invitations">Send an invitation</a></div>}
+        <div class="network-people-list">{accepted.map((connection) => <section class="network-person-row">
+          <div class="connection-person">{connection.other.avatarAssetId ? <img class="person-avatar" src={`/api/media/${connection.other.avatarAssetId}`} alt="" /> : <span class="tutor-avatar">{initials(connection.other.displayName)}</span>}<div><strong>{connection.other.displayName}</strong><small>{connection.other.email}</small></div></div>
+          <div class="network-person-meta"><span>{connection.sharesMyProgress ? "Can view your progress" : "Progress private"}</span></div>
+          <div class="network-row-actions"><a class="button button-small" href={`/network?section=messages&thread=${connection.id}`}>Message</a><a class="text-link" href={`/network?section=sharing#connection-${connection.id}`}>Sharing</a><form action="/api/connections/block" method="post"><input type="hidden" name="connectionId" value={connection.id} /><button class="text-link danger-link" type="submit">Block</button></form></div>
+        </section>)}</div>
+      </article>}
+
+      {section === "invitations" && <>
+        <article class="panel network-section-panel"><span class="eyebrow">Add someone</span><h2>Invite by email</h2><p>For privacy, PencilScope has no public user directory. Enter the exact email address of someone you know.</p><form class="inline-form network-invite-form" action="/api/connections/create" method="post"><label>Email address<input name="email" required type="email" autocomplete="email" placeholder="person@example.com" /></label><button class="button" type="submit">Send invitation</button></form></article>
+        <article class="panel network-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Invitations</span><h2>Incoming and sent</h2></div><span class="network-count-label">{pending.length} pending</span></div>
+          {!pending.length && <div class="network-empty"><h3>No pending invitations</h3><p>New network invitations will appear here.</p></div>}
+          <div class="connection-grid">{pending.map((connection) => <section class="network-request-card">
+            <div class="connection-person">{connection.other.avatarAssetId ? <img class="person-avatar" src={`/api/media/${connection.other.avatarAssetId}`} alt="" /> : <span class="tutor-avatar">{initials(connection.other.displayName)}</span>}<div><strong>{connection.other.displayName}</strong><small>{connection.other.email}</small></div></div>
+            {connection.incoming ? <form class="stack-form" action="/api/connections/accept" method="post"><input type="hidden" name="connectionId" value={connection.id} /><label class="sharing-check"><input type="checkbox" name="shareProgress" /> Share my course progress after accepting</label><button class="button button-small" type="submit">Accept invitation</button></form> : <p class="form-message">Invitation sent. Waiting for acceptance.</p>}
+            <form action="/api/connections/block" method="post"><input type="hidden" name="connectionId" value={connection.id} /><button class="text-link danger-link" type="submit">Block</button></form>
+          </section>)}</div>
+        </article>
+      </>}
+
+      {section === "messages" && <section class="network-inbox" data-selected-thread={selectedId ?? undefined}>
+        <aside class="panel inbox-list" aria-label="Conversations"><div class="inbox-list-heading"><h2>Messages</h2><a href="/network?section=people">People</a></div>
+          {!threads.length && <div class="inbox-empty"><p>No conversations yet.</p><a class="button button-small" href="/network?section=people">Choose someone</a></div>}
+          {threads.map((thread) => <a class:list={["inbox-thread", { active: thread.id === selectedId, unread: thread.unreadCount > 0 }]} href={`/network?section=messages&thread=${thread.id}`}>{thread.other.avatarAssetId ? <img class="person-avatar" src={`/api/media/${thread.other.avatarAssetId}`} alt="" /> : <span class="tutor-avatar">{initials(thread.other.displayName)}</span>}<span class="inbox-thread-copy"><strong>{thread.other.displayName}</strong><small>{thread.lastMessage?.body ?? "Start a conversation"}</small></span><span class="inbox-thread-meta">{thread.unreadCount > 0 && <b>{thread.unreadCount > 99 ? "99+" : thread.unreadCount}</b>}{thread.lastMessage && <time datetime={thread.lastMessage.created_at}>{new Date(thread.lastMessage.created_at).toLocaleDateString("en-SG", { month: "short", day: "numeric" })}</time>}</span></a>)}
+        </aside>
+        <article class="panel inbox-conversation">{!selected ? <div class="inbox-empty inbox-empty-large"><span aria-hidden="true">✉</span><h2>Select a conversation</h2><p>Messages with people in your network will appear here.</p></div> : <>
+          <header class="conversation-heading">{selected.thread.other.avatarAssetId ? <img class="person-avatar" src={`/api/media/${selected.thread.other.avatarAssetId}`} alt="" /> : <span class="tutor-avatar">{initials(selected.thread.other.displayName)}</span>}<div><h2>{selected.thread.other.displayName}</h2><small>{selected.thread.other.email}</small></div><a class="text-link" href={`/network?section=sharing#connection-${selected.thread.id}`}>Sharing & privacy</a></header>
+          <div class="conversation-messages" data-message-list>{!selected.messages.length && <p class="form-message">No messages yet. Say hello when you are ready.</p>}{selected.messages.map((message) => <div class:list={["message-bubble", { mine: message.sender_user_id === userId }]}><p>{message.body}</p><small>{message.sender_user_id === userId ? "You" : message.sender_name} · {new Date(message.created_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" })}</small></div>)}</div>
+          <form class="conversation-composer" data-message-form><label class="sr-only" for="message-body">New message</label><textarea id="message-body" name="body" required maxlength="2000" rows="2" placeholder="Write a message…"></textarea><button class="button" type="submit">Send</button><p class="form-error" hidden data-message-error></p></form>
+        </>}</article>
+      </section>}
+
+      {section === "learners" && isCreator && <article class="panel network-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Creator network</span><h2>Invite learners</h2><p>Choose a person and a published offering. Normal course pricing and enrolment rules still apply.</p></div></div>
+        {!collaboration.offerings.length && <p class="form-message">Create and publish a priced offering before inviting learners.</p>}
+        <div class="network-collaboration-grid">{accepted.map((connection) => <section class="collaboration-card"><div class="connection-person">{connection.other.avatarAssetId ? <img class="person-avatar" src={`/api/media/${connection.other.avatarAssetId}`} alt="" /> : <span class="tutor-avatar">{initials(connection.other.displayName)}</span>}<div><strong>{connection.other.displayName}</strong><small>{connection.other.email}</small></div></div><form class="stack-form" data-collaboration-form="learner"><input type="hidden" name="connectionId" value={connection.id} /><label>Course offering<select name="courseOffering" required><option value="">Choose an offering</option>{collaboration.offerings.map((offering) => { const course = collaboration.courses.find((item) => item.id === offering.course_id); return <option value={`${offering.course_id}|${offering.id}`}>{course?.title} — {offering.title}</option>; })}</select></label><label>Message<textarea name="personalMessage" maxlength="500" rows="2" placeholder="Optional welcome note"></textarea></label><button class="button button-small" type="submit">Invite learner</button><p class="collaboration-status" aria-live="polite"></p></form></section>)}</div>
+      </article>}
+
+      {section === "collaborators" && isCreator && <article class="panel network-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Creator network</span><h2>Course collaborators</h2><p>Grant a course-specific role. The recipient must accept before access becomes active.</p></div></div>
+        <div class="network-collaboration-grid">{accepted.map((connection) => <section class="collaboration-card"><div class="connection-person">{connection.other.avatarAssetId ? <img class="person-avatar" src={`/api/media/${connection.other.avatarAssetId}`} alt="" /> : <span class="tutor-avatar">{initials(connection.other.displayName)}</span>}<div><strong>{connection.other.displayName}</strong><small>{connection.other.email}</small></div></div><form class="stack-form" data-collaboration-form="collaborator"><input type="hidden" name="connectionId" value={connection.id} /><label>Course<select name="courseId" required><option value="">Choose a course</option>{collaboration.courses.map((course) => <option value={course.id}>{course.title}</option>)}</select></label><label>Role<select name="memberRole"><option value="instructor">Co-host</option><option value="editor">Content editor</option><option value="facilitator">Facilitator</option><option value="administrator">Course manager</option></select></label><label>Message<textarea name="personalMessage" maxlength="500" rows="2" placeholder="Optional collaboration note"></textarea></label><button class="button button-small" type="submit">Invite collaborator</button><p class="collaboration-status" aria-live="polite"></p></form></section>)}</div>
+      </article>}
+
+      {section === "sharing" && <article class="panel network-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Permission control</span><h2>Sharing & privacy</h2><p>Your progress is private until you enable it for a specific person.</p></div></div>
+        {!accepted.length && <p class="form-message">Connect with someone before configuring progress visibility.</p>}
+        <div class="network-sharing-list">{accepted.map((connection) => <section id={`connection-${connection.id}`} class="network-sharing-card"><header class="connection-person">{connection.other.avatarAssetId ? <img class="person-avatar" src={`/api/media/${connection.other.avatarAssetId}`} alt="" /> : <span class="tutor-avatar">{initials(connection.other.displayName)}</span>}<div><strong>{connection.other.displayName}</strong><small>{connection.other.email}</small></div></header><form class="stack-form compact-form" action="/api/connections/sharing" method="post"><input type="hidden" name="connectionId" value={connection.id} /><label class="sharing-check"><input type="checkbox" name="shareProgress" checked={connection.sharesMyProgress} /> Let this person see my course progress</label><button class="button button-small" type="submit">Update visibility</button></form><div class="shared-progress"><h4>{connection.other.displayName}'s shared progress</h4>{!connection.canViewTheirProgress ? <p class="form-message">This person has not shared their progress with you.</p> : !connection.progress.length ? <p class="form-message">No active course progress yet.</p> : connection.progress.map((course) => <div class="progress-share"><span><strong>{course.title}</strong><small>{course.progress_percent}% complete</small></span><progress value={course.progress_percent} max="100"></progress></div>)}</div></section>)}</div>
+      </article>}
+
+      {section === "blocked" && <article class="panel network-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Safety</span><h2>Blocked people</h2><p>Blocked people cannot message you or send a new network invitation. Paid enrolments and course permissions are managed separately.</p></div></div>
+        {!blocked.length && <div class="network-empty"><h3>No blocked people</h3><p>People you block will appear here.</p></div>}
+        <div class="network-people-list">{blocked.map((connection) => <section class="network-person-row"><div class="connection-person">{connection.other.avatarAssetId ? <img class="person-avatar" src={`/api/media/${connection.other.avatarAssetId}`} alt="" /> : <span class="tutor-avatar">{initials(connection.other.displayName)}</span>}<div><strong>{connection.other.displayName}</strong><small>{connection.other.email}</small></div></div><p class="network-person-meta">{connection.blockedByMe ? "Blocked by you" : "This person has blocked the connection"}</p>{connection.blockedByMe && <form action="/api/connections/unblock" method="post"><input type="hidden" name="connectionId" value={connection.id} /><button class="button button-small button-secondary" type="submit">Unblock</button></form>}</section>)}</div>
+      </article>}
+    </div>
+  </section>
+</BaseLayout>
+
+<script>
+  const layout = document.querySelector<HTMLElement>(".network-inbox");
+  const threadId = layout?.dataset.selectedThread;
+  if (threadId) {
+    fetch(`/api/messages/${encodeURIComponent(threadId)}/read`, { method: "POST" }).then(() => {
+      window.dispatchEvent(new CustomEvent("pencilscope:messages-read"));
+    });
+  }
+  const messageForm = document.querySelector<HTMLFormElement>("[data-message-form]");
+  messageForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!threadId) return;
+    const button = messageForm.querySelector<HTMLButtonElement>("button");
+    const error = messageForm.querySelector<HTMLElement>("[data-message-error]");
+    const body = new FormData(messageForm).get("body");
+    if (typeof body !== "string" || !body.trim()) return;
+    if (button) button.disabled = true;
+    if (error) error.hidden = true;
+    try {
+      const response = await fetch(`/api/messages/${encodeURIComponent(threadId)}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body: body.trim() }) });
+      if (!response.ok) throw new Error("Message could not be sent.");
+      window.location.reload();
+    } catch (reason) {
+      if (error) { error.textContent = reason instanceof Error ? reason.message : "Message could not be sent."; error.hidden = false; }
+      if (button) button.disabled = false;
+    }
+  });
+
+  document.querySelectorAll<HTMLFormElement>("[data-collaboration-form]").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = form.querySelector<HTMLButtonElement>("button[type='submit']");
+      const status = form.querySelector<HTMLElement>(".collaboration-status");
+      const values = Object.fromEntries(new FormData(form));
+      const kind = form.dataset.collaborationForm;
+      let endpoint = "";
+      let body: Record<string, unknown> = {};
+      if (kind === "learner") {
+        const [courseId, offeringId] = String(values.courseOffering ?? "").split("|");
+        if (!courseId || !offeringId) return;
+        endpoint = `/api/tutor/courses/${encodeURIComponent(courseId)}/invitations`;
+        body = { offeringId, connectionId: values.connectionId, personalMessage: values.personalMessage, expiresInDays: 14 };
+      } else {
+        const courseId = String(values.courseId ?? "");
+        if (!courseId) return;
+        endpoint = `/api/tutor/courses/${encodeURIComponent(courseId)}/team-invitations`;
+        body = { connectionId: values.connectionId, memberRole: values.memberRole, personalMessage: values.personalMessage };
+      }
+      if (button) button.disabled = true;
+      if (status) { status.className = "collaboration-status form-message"; status.textContent = "Sending invitation…"; }
+      try {
+        const response = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+        const result = await response.json() as { error?: { message?: string } };
+        if (!response.ok) throw new Error(result.error?.message ?? "The invitation could not be sent.");
+        if (status) { status.className = "collaboration-status form-success"; status.textContent = "Invitation sent."; }
+        form.reset();
+      } catch (error) {
+        if (status) { status.className = "collaboration-status form-error"; status.textContent = error instanceof Error ? error.message : "The invitation could not be sent."; }
+      } finally {
+        if (button) button.disabled = false;
+      }
+    });
+  });
+</script>

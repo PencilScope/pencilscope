@@ -1,0 +1,385 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { findLearningProductBySlug, requestApi } from "@/lib/api-client";
+import { learningProductMeta } from "@/lib/learning-products";
+
+const { slug } = Astro.params;
+const sessionUserId = await Astro.session?.get("userId");
+const userId = typeof sessionUserId === "string" ? sessionUserId : undefined;
+const product = slug ? await findLearningProductBySlug(slug, userId) : undefined;
+if (!product) return Astro.redirect("/404");
+const meta = learningProductMeta[product.product_type];
+const signedIn = Boolean(userId);
+const hasAccess = Boolean(product.has_access);
+const hasPricedOffer = Boolean(product.offer_course_slug && product.offer_title && product.offer_price_cents);
+const offerPrice = product.offer_price_cents ?? 0;
+const questions = product.questions ?? [];
+const contentUrl = product.content_url ?? "";
+let trustedVideoEmbed = "";
+try {
+  const parsed = new URL(contentUrl);
+  const hostname = parsed.hostname.toLowerCase().replace(/^www\./, "");
+  let videoId = "";
+  if (hostname === "youtu.be") videoId = parsed.pathname.split("/").filter(Boolean)[0] ?? "";
+  if (["youtube.com", "m.youtube.com"].includes(hostname)) {
+    videoId = parsed.searchParams.get("v") ?? parsed.pathname.match(/^\/(?:embed|shorts)\/([A-Za-z0-9_-]+)/)?.[1] ?? "";
+  }
+  if (/^[A-Za-z0-9_-]{6,20}$/.test(videoId)) trustedVideoEmbed = `https://www.youtube-nocookie.com/embed/${videoId}`;
+  const vimeoId = hostname === "vimeo.com" ? parsed.pathname.match(/^\/(\d+)/)?.[1] ?? "" : "";
+  if (vimeoId) trustedVideoEmbed = `https://player.vimeo.com/video/${vimeoId}`;
+} catch {
+  trustedVideoEmbed = "";
+}
+const privateLibraryContent = contentUrl.includes("/api/creator/content-library/items/") && contentUrl.endsWith("/content");
+const directVideo = product.product_type === "video" && (privateLibraryContent || Boolean(contentUrl.match(/\.(?:m3u8|mp4|og[gv]|webm)(?:\?|$)/i))) && !trustedVideoEmbed;
+const directAudio = product.product_type === "audio" && (privateLibraryContent || Boolean(contentUrl.match(/\.(?:aac|flac|m4a|mp3|oga|ogg|wav)(?:\?|$)/i)));
+const directImage = !["video", "audio"].includes(product.product_type) && Boolean(contentUrl.match(/\.(?:avif|gif|jpe?g|png|webp)(?:\?|$)/i));
+const directPdf = !["video", "audio"].includes(product.product_type) && (privateLibraryContent || Boolean(contentUrl.match(/\.pdf(?:\?|$)/i)));
+type ProductProgress = {
+  progress: { status: string; progress_percent: number; position_seconds: number; duration_seconds: number; total_seconds: number; first_opened_at: string | null; last_opened_at: string | null; completed_at: string | null };
+  activities: Array<{ id: string; activity_type: string; progress_percent: number; position_seconds: number; seconds_spent: number; created_at: string }>;
+  attempts: Array<{ id: string; score_percent: number; passed: number; submitted_at: string }>;
+};
+let progressData: ProductProgress = {
+  progress: { status: "not_started", progress_percent: 0, position_seconds: 0, duration_seconds: 0, total_seconds: 0, first_opened_at: null, last_opened_at: null, completed_at: null },
+  activities: [], attempts: []
+};
+if (userId && hasAccess) {
+  const progressResponse = await requestApi(`/api/learning-products/${encodeURIComponent(product.slug)}/progress`, { userId });
+  if (progressResponse.ok) progressData = await progressResponse.json<ProductProgress>();
+}
+const formatDuration = (seconds: number) => {
+  const minutes = Math.floor(Math.max(0, seconds) / 60);
+  const remaining = Math.floor(Math.max(0, seconds) % 60);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m ${remaining}s`;
+};
+const progressHistory = [
+  ...progressData.activities.map((activity) => ({
+    id: activity.id, date: activity.created_at, kind: "activity" as const,
+    title: activity.activity_type === "completed" ? "Completed product" : activity.activity_type === "paused" ? "Paused learning" : "Opened product",
+    detail: `${activity.progress_percent}% complete${activity.seconds_spent ? ` · ${formatDuration(activity.seconds_spent)} this session` : ""}`
+  })),
+  ...progressData.attempts.map((attempt) => ({
+    id: attempt.id, date: attempt.submitted_at, kind: "attempt" as const,
+    title: `${meta.label} attempt`, detail: `${attempt.score_percent}% · ${attempt.passed ? "Passed" : "Review recommended"}`
+  }))
+].sort((left, right) => right.date.localeCompare(left.date)).slice(0, 20);
+const assessmentGuidance = product.product_type === "quiz"
+  ? "Answer each question and submit for immediate feedback and explanations."
+  : product.product_type === "test"
+    ? "Complete every question before submitting. Your score will be recorded in Results."
+    : "Use the timer and complete the full paper before submitting your mock exam.";
+---
+<BaseLayout title={`${product.title} — PencilScope`} description={product.description}>
+  <section class:list={["product-detail-hero", `product-${product.product_type}`]}>
+    <div class="shell product-detail-heading">
+      <a class="back-link" href={hasAccess ? "/dashboard?workspace=learning&section=learning" : "/library"}>← {hasAccess ? "My Learning" : "Learning library"}</a>
+      <div class="product-detail-title">
+        <span class="product-symbol">{meta.symbol}</span>
+        <div><span class="eyebrow">{meta.label} · {product.subject}</span><h1>{product.title}</h1><p>{product.description}</p></div>
+      </div>
+      <div class="product-detail-facts">
+        <span><small>Created by</small><strong>{product.creator_name}</strong></span>
+        <span><small>Made for</small><strong>{product.audience}</strong></span>
+        <span><small>Time</small><strong>{product.estimated_minutes ?? "—"} min</strong></span>
+        <span><small>Offer price</small><strong>{hasPricedOffer ? new Intl.NumberFormat("en-SG", { style: "currency", currency: product.currency }).format(offerPrice / 100) : "Not yet priced"}</strong></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="shell product-detail-layout">
+    <main class="product-experience" data-product-progress data-product-slug={product.slug} data-saved-position={progressData.progress.position_seconds} data-saved-progress={progressData.progress.progress_percent}>
+      {hasAccess && <section class="panel product-progress-summary"><div><span class="eyebrow">Your progress</span><h2 data-progress-status>{progressData.progress.status === "completed" ? "Completed" : progressData.progress.progress_percent > 0 ? "In progress" : "Ready to start"}</h2><p data-progress-copy>{progressData.progress.last_opened_at ? `Last activity ${new Date(progressData.progress.last_opened_at).toLocaleString("en-SG")}` : "Your activity will be saved across devices."}</p></div><div class="product-progress-ring" style={`--progress:${progressData.progress.progress_percent}`}><strong data-progress-percent>{progressData.progress.progress_percent}%</strong></div><progress value={progressData.progress.progress_percent} max="100" data-progress-bar></progress></section>}
+      {!hasAccess && !hasPricedOffer ? (
+        <article class="panel access-callout access-callout-pending">
+          <span class="eyebrow">Published preview</span>
+          <h2>Enrolment is not open yet</h2>
+          <p>The creator has published this product overview and is preparing its priced learning offer. Protected content, answers and attempts remain locked until enrolment opens.</p>
+          <a class="button button-secondary" href="/courses">Browse available offers</a>
+        </article>
+      ) : !hasAccess ? (
+        <article class="panel access-callout">
+          <span class="eyebrow">Purchase required</span>
+          <h2>Unlock this product through its learning offer</h2>
+          <p>The creator has published this product inside <strong>{product.offer_title ?? "a priced offer"}</strong>. Enrol to access the content and keep your progress.</p>
+          {product.offer_course_slug
+            ? <a class="button" href={`/courses/${product.offer_course_slug}`}>View offer and enrol</a>
+            : <a class="button" href="/courses">Browse published offers</a>}
+        </article>
+      ) : meta.assessment ? (
+        <article class="panel assessment-product">
+          <div class="product-section-heading"><span class="eyebrow">{questions.length} questions · {product.time_limit_minutes ?? 20} minutes</span><h2>{meta.action}</h2><p>{assessmentGuidance}</p></div>
+          {!signedIn && <div class="access-callout"><h3>Sign in to save your result</h3><p>Your attempt and score will be kept with your learning progress.</p><a class="button" href={`/sign-in?next=/library/${product.slug}`}>Log in to begin</a></div>}
+          {signedIn && <form class="standalone-assessment" data-slug={product.slug} data-assessment-type={product.product_type} data-time-limit={product.time_limit_minutes ?? 20}>
+            <div class="assessment-toolbar"><strong>{meta.label}</strong><span data-assessment-progress>0 of {questions.length} answered</span><time data-assessment-timer>{product.time_limit_minutes ?? 20}:00</time></div>
+            {questions.map((question, questionIndex) => (
+              <fieldset class="question-card" data-question={questionIndex}>
+                <legend><span>{String(questionIndex + 1).padStart(2, "0")}</span>{question.prompt}</legend>
+                {question.media && <figure class="question-media">
+                  {question.media.mediaType === "image"
+                    ? <img src={question.media.contentUrl} alt={question.media.altText} loading="lazy" />
+                    : question.media.mediaType === "video"
+                      ? <video src={question.media.contentUrl} controls preload="metadata"></video>
+                      : <audio src={question.media.contentUrl} controls preload="metadata"></audio>}
+                  {question.media.caption && <figcaption>{question.media.caption}</figcaption>}
+                </figure>}
+                <div class="option-list">{question.options.map((option, optionIndex) => (
+                  <label><input type="radio" name={`question-${questionIndex}`} value={optionIndex} required /><span>{option}</span></label>
+                ))}</div>
+                <p class="answer-feedback" hidden></p>
+              </fieldset>
+            ))}
+            <button class="button" type="submit">Submit {meta.label.toLowerCase()}</button>
+            <div class="assessment-result" aria-live="polite"></div>
+          </form>}
+        </article>
+      ) : (
+        <article class="panel resource-product">
+          <span class="eyebrow">Ready when you are</span><h2>{meta.action}</h2>
+          <p>{meta.description} This product is unlocked through your enrolled learning offer.</p>
+          {trustedVideoEmbed && <div class="trusted-video-embed"><iframe src={trustedVideoEmbed} title={`${product.title} video`} loading="lazy" allow="accelerometer; autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe></div>}
+          {directVideo && <video class="native-product-player" controls preload="metadata" src={contentUrl} data-product-media data-media-key={product.id}><track kind="captions" /></video>}
+          {directAudio && <audio class="native-product-player native-audio-player" controls preload="metadata" src={contentUrl} data-product-media data-media-key={product.id}></audio>}
+          {directImage && <figure class="inline-product-image"><img src={contentUrl} alt={product.title} loading="lazy" /><figcaption>{product.title} · {product.subject}</figcaption></figure>}
+          {directPdf && !directImage && <iframe class="inline-product-document" src={contentUrl} title={`${product.title} document`}></iframe>}
+          <div class="resource-actions">
+            {contentUrl && !trustedVideoEmbed && !directVideo && !directAudio && !directImage && !directPdf && <a class="button" href={contentUrl} target="_blank" rel="noopener">{meta.action} ↗</a>}
+            <button class="button button-secondary mark-product-complete" type="button" hidden={progressData.progress.status === "completed"}>Mark as completed</button>
+          </div>
+        </article>
+      )}
+    </main>
+    <aside class="panel product-about">
+      <span class="eyebrow">Why this format?</span><h2>{meta.label}</h2><p>{meta.description}</p>
+      <dl><div><dt>Topic</dt><dd>{product.subject}</dd></div><div><dt>Audience</dt><dd>{product.audience}</dd></div><div><dt>Creator</dt><dd>{product.creator_name}</dd></div></dl>
+      <a class="text-link" href={`/library?type=${product.product_type}`}>Explore more {meta.plural.toLowerCase()} →</a>
+    </aside>
+  </section>
+  {hasAccess && <section class="shell product-progress-history" id="progress-history"><div class="product-history-heading"><div><span class="eyebrow">Learning record</span><h2>Your progress history</h2><p>Playback, reading and assessment activity saved for this product.</p></div><a class="text-link" href="/dashboard?workspace=learning&section=results">View all results →</a></div><div class="product-history-stats"><span><small>Status</small><strong data-history-status>{progressData.progress.status.replace("_", " ")}</strong></span><span><small>Time spent</small><strong data-history-time>{formatDuration(progressData.progress.total_seconds)}</strong></span><span><small>Last position</small><strong data-history-position>{progressData.progress.duration_seconds ? `${formatDuration(progressData.progress.position_seconds)} / ${formatDuration(progressData.progress.duration_seconds)}` : `${progressData.progress.progress_percent}%`}</strong></span><span><small>Completed</small><strong>{progressData.progress.completed_at ? new Date(progressData.progress.completed_at).toLocaleDateString("en-SG") : "—"}</strong></span></div><div class="product-history-list" data-history-list>{progressHistory.length ? progressHistory.map((entry) => <article class:list={{ "history-attempt": entry.kind === "attempt" }}><span aria-hidden="true">{entry.kind === "attempt" ? "✓" : "▶"}</span><div><strong>{entry.title}</strong><small>{entry.detail}</small></div><time datetime={entry.date}>{new Date(entry.date).toLocaleString("en-SG")}</time></article>) : <p class="form-message" data-empty-history>Your activity will appear here after you begin.</p>}</div></section>}
+</BaseLayout>
+
+<script>
+  const progressRoot = document.querySelector<HTMLElement>("[data-product-progress]");
+  const productSlug = progressRoot?.dataset.productSlug ?? "";
+  let currentProgress = Number(progressRoot?.dataset.savedProgress ?? 0);
+  const progressPercent = document.querySelector<HTMLElement>("[data-progress-percent]");
+  const progressBar = document.querySelector<HTMLProgressElement>("[data-progress-bar]");
+  const progressStatus = document.querySelector<HTMLElement>("[data-progress-status]");
+  const progressCopy = document.querySelector<HTMLElement>("[data-progress-copy]");
+  const historyStatus = document.querySelector<HTMLElement>("[data-history-status]");
+  const historyPosition = document.querySelector<HTMLElement>("[data-history-position]");
+  const historyList = document.querySelector<HTMLElement>("[data-history-list]");
+  const formatSeconds = (seconds: number) => {
+    const safe = Math.max(0, Math.floor(seconds));
+    const minutes = Math.floor(safe / 60);
+    const remaining = safe % 60;
+    return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m ${remaining}s`;
+  };
+  const updateProgressUi = (percent: number, status: string, position = 0, duration = 0) => {
+    currentProgress = Math.max(currentProgress, percent);
+    if (progressPercent) progressPercent.textContent = `${currentProgress}%`;
+    if (progressBar) progressBar.value = currentProgress;
+    if (progressStatus) progressStatus.textContent = status === "completed" ? "Completed" : currentProgress > 0 ? "In progress" : "Ready to start";
+    if (progressCopy) progressCopy.textContent = status === "completed" ? "Completed and saved to your learning record." : "Progress saved across your devices.";
+    if (historyStatus) historyStatus.textContent = status.replace("_", " ");
+    if (historyPosition) historyPosition.textContent = duration ? `${formatSeconds(position)} / ${formatSeconds(duration)}` : `${currentProgress}%`;
+    document.querySelector<HTMLElement>(".product-progress-ring")?.style.setProperty("--progress", String(currentProgress));
+    if (status === "completed") document.querySelector<HTMLButtonElement>(".mark-product-complete")?.setAttribute("hidden", "");
+  };
+  const addHistoryRow = (title: string, detail: string, attempt = false) => {
+    if (!historyList) return;
+    historyList.querySelector("[data-empty-history]")?.remove();
+    const row = document.createElement("article");
+    if (attempt) row.className = "history-attempt";
+    const icon = document.createElement("span");
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = attempt ? "✓" : "▶";
+    const copy = document.createElement("div");
+    const strong = document.createElement("strong");
+    strong.textContent = title;
+    const small = document.createElement("small");
+    small.textContent = detail;
+    copy.appendChild(strong);
+    copy.appendChild(small);
+    const time = document.createElement("time");
+    time.dateTime = new Date().toISOString();
+    time.textContent = new Date().toLocaleString("en-SG");
+    row.appendChild(icon);
+    row.appendChild(copy);
+    row.appendChild(time);
+    historyList.insertBefore(row, historyList.firstChild);
+  };
+  const saveProductProgress = async (input: {
+    progressPercent: number; positionSeconds?: number; durationSeconds?: number;
+    secondsSpent?: number; status?: string; activityType?: string;
+  }, keepalive = false) => {
+    if (!productSlug) return null;
+    try {
+      const response = await fetch(`/api/learning-products/${encodeURIComponent(productSlug)}/progress`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+        keepalive
+      });
+      if (!response.ok) return null;
+      const result = await response.json() as { status: string; progressPercent: number };
+      updateProgressUi(result.progressPercent, result.status, input.positionSeconds, input.durationSeconds);
+      return result;
+    } catch {
+      return null;
+    }
+  };
+  if (progressRoot) {
+    saveProductProgress({ progressPercent: currentProgress, status: currentProgress >= 100 ? "completed" : "in_progress", activityType: "opened" });
+  }
+
+  const assessment = document.querySelector<HTMLFormElement>(".standalone-assessment");
+  const progress = assessment?.querySelector<HTMLElement>("[data-assessment-progress]");
+  const timer = assessment?.querySelector<HTMLElement>("[data-assessment-timer]");
+  const updateProgress = () => {
+    if (!assessment || !progress) return;
+    const answered = assessment.querySelectorAll<HTMLInputElement>('input[type="radio"]:checked').length;
+    const total = assessment.querySelectorAll<HTMLElement>("[data-question]").length;
+    progress.textContent = `${answered} of ${total} answered`;
+  };
+  assessment?.addEventListener("change", updateProgress);
+  if (assessment && timer) {
+    let remaining = Math.max(1, Number(assessment.dataset.timeLimit ?? 20)) * 60;
+    const tick = window.setInterval(() => {
+      remaining -= 1;
+      const minutes = Math.floor(remaining / 60);
+      const seconds = String(remaining % 60).padStart(2, "0");
+      timer.textContent = `${minutes}:${seconds}`;
+      timer.classList.toggle("urgent", remaining <= 300);
+      if (remaining <= 0) {
+        window.clearInterval(tick);
+        assessment.requestSubmit();
+      }
+    }, 1000);
+  }
+  assessment?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = assessment.querySelector<HTMLButtonElement>('button[type="submit"]');
+    const resultBox = assessment.querySelector<HTMLElement>(".assessment-result");
+    const questionCards = [...assessment.querySelectorAll<HTMLElement>("[data-question]")];
+    const answers = questionCards.map((card, index) => {
+      const selected = card.querySelector<HTMLInputElement>(`input[name="question-${index}"]:checked`);
+      return selected ? Number(selected.value) : -1;
+    });
+    if (answers.some((answer) => answer < 0)) {
+      if (resultBox) {
+        resultBox.className = "assessment-result form-error";
+        resultBox.textContent = "Answer every question before submitting.";
+      }
+      return;
+    }
+    if (button) { button.disabled = true; button.textContent = "Marking…"; }
+    const response = await fetch(`/api/learning-products/${encodeURIComponent(assessment.dataset.slug ?? "")}/attempts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answers })
+    });
+    const payload = await response.json().catch(() => ({})) as {
+      error?: { message?: string };
+      result?: {
+        scorePercent: number; correct: number; total: number; passed: boolean; passingScore: number;
+        questions: Array<{ selectedIndex: number; correctIndex: number; explanation: string }>;
+      };
+    };
+    if (!response.ok || !payload.result) {
+      if (resultBox) {
+        resultBox.className = "assessment-result form-error";
+        resultBox.textContent = payload.error?.message ?? "Your answers could not be submitted.";
+      }
+      if (button) { button.disabled = false; button.textContent = "Submit answers"; }
+      return;
+    }
+    const revealAnswers = assessment.dataset.assessmentType === "quiz";
+    payload.result.questions.forEach((marked, index) => {
+      const card = questionCards[index];
+      if (!revealAnswers) return;
+      card.classList.toggle("answer-correct", marked.selectedIndex === marked.correctIndex);
+      card.classList.toggle("answer-incorrect", marked.selectedIndex !== marked.correctIndex);
+      card.querySelectorAll("label").forEach((label, optionIndex) => {
+        label.classList.toggle("correct-option", optionIndex === marked.correctIndex);
+        label.classList.toggle("selected-option", optionIndex === marked.selectedIndex);
+      });
+      const feedback = card.querySelector<HTMLElement>(".answer-feedback");
+      if (feedback) {
+        feedback.hidden = false;
+        feedback.textContent = marked.explanation || (marked.selectedIndex === marked.correctIndex ? "Correct." : "Review the highlighted answer.");
+      }
+    });
+    if (resultBox) {
+      resultBox.className = `assessment-result ${payload.result.passed ? "result-passed" : "result-review"}`;
+      resultBox.innerHTML = `<strong>${payload.result.scorePercent}%</strong><span>${payload.result.correct} of ${payload.result.total} correct · ${payload.result.passed ? "Passed" : `Review and try again (pass mark ${payload.result.passingScore}%)`}${revealAnswers ? "" : " · Detailed feedback is available from Results when released."}</span>`;
+    }
+    assessment.querySelectorAll("input").forEach((control) => control.setAttribute("disabled", ""));
+    if (button) { button.disabled = !revealAnswers; button.textContent = revealAnswers ? "Try again" : "Submitted"; }
+    updateProgressUi(100, "completed");
+    addHistoryRow(`${assessment.dataset.assessmentType?.replace("_", " ") ?? "Assessment"} attempt`, `${payload.result.scorePercent}% · ${payload.result.passed ? "Passed" : "Review recommended"}`, true);
+    resultBox?.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
+
+  document.querySelectorAll<HTMLMediaElement>("[data-product-media]").forEach((media) => {
+    const storageKey = `pencilscope-media:${media.dataset.mediaKey ?? ""}`;
+    let lastSyncedAt = 0;
+    let playedSinceSync = 0;
+    let lastPlayTick = 0;
+    media.addEventListener("loadedmetadata", () => {
+      const saved = Number(progressRoot?.dataset.savedPosition ?? localStorage.getItem(storageKey) ?? 0);
+      if (saved > 0 && saved < media.duration - 5) media.currentTime = saved;
+    }, { once: true });
+    media.addEventListener("play", () => { lastPlayTick = performance.now(); });
+    media.addEventListener("timeupdate", () => {
+      localStorage.setItem(storageKey, String(media.currentTime));
+      if (!media.paused && lastPlayTick) {
+        const now = performance.now();
+        playedSinceSync += Math.max(0, (now - lastPlayTick) / 1000);
+        lastPlayTick = now;
+      }
+      const percent = media.duration ? Math.min(99, Math.round(media.currentTime / media.duration * 100)) : currentProgress;
+      updateProgressUi(percent, "in_progress", media.currentTime, media.duration);
+      if (Date.now() - lastSyncedAt >= 15000) {
+        const secondsSpent = Math.min(300, Math.round(playedSinceSync));
+        playedSinceSync = 0;
+        lastSyncedAt = Date.now();
+        saveProductProgress({ progressPercent: percent, positionSeconds: media.currentTime, durationSeconds: media.duration, secondsSpent, status: "in_progress", activityType: "progressed" });
+      }
+    });
+    media.addEventListener("pause", () => {
+      if (media.ended) return;
+      const percent = media.duration ? Math.min(99, Math.round(media.currentTime / media.duration * 100)) : currentProgress;
+      const secondsSpent = Math.min(300, Math.round(playedSinceSync));
+      playedSinceSync = 0;
+      saveProductProgress({ progressPercent: percent, positionSeconds: media.currentTime, durationSeconds: media.duration, secondsSpent, status: "in_progress", activityType: "paused" });
+      addHistoryRow("Paused learning", `${percent}% complete${secondsSpent ? ` · ${formatSeconds(secondsSpent)} this session` : ""}`);
+    });
+    media.addEventListener("ended", () => {
+      localStorage.removeItem(storageKey);
+      const secondsSpent = Math.min(300, Math.round(playedSinceSync));
+      playedSinceSync = 0;
+      saveProductProgress({ progressPercent: 100, positionSeconds: media.duration, durationSeconds: media.duration, secondsSpent, status: "completed", activityType: "completed" });
+      addHistoryRow("Completed product", "100% complete");
+    });
+    window.addEventListener("pagehide", () => {
+      if (media.paused || media.ended) return;
+      const percent = media.duration ? Math.min(99, Math.round(media.currentTime / media.duration * 100)) : currentProgress;
+      saveProductProgress({ progressPercent: percent, positionSeconds: media.currentTime, durationSeconds: media.duration, secondsSpent: Math.min(300, Math.round(playedSinceSync)), status: "in_progress", activityType: "progressed" }, true);
+    });
+  });
+
+  document.querySelector<HTMLButtonElement>(".mark-product-complete")?.addEventListener("click", async (event) => {
+    const button = event.currentTarget as HTMLButtonElement;
+    button.disabled = true;
+    button.textContent = "Saving…";
+    const saved = await saveProductProgress({ progressPercent: 100, status: "completed", activityType: "completed" });
+    if (saved) {
+      button.hidden = true;
+      addHistoryRow("Completed product", "100% complete");
+    } else {
+      button.disabled = false;
+      button.textContent = "Try again";
+    }
+  });
+</script>

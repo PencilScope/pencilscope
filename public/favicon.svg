@@ -1,8 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PencilScope">
-  <rect width="64" height="64" rx="14" fill="#17372b"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">PencilScope</title>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#eff6ff"/>
   <g transform="rotate(-5 32 32)">
-    <path d="M12 24a5 5 0 0 1 5-5h1a5 5 0 0 1 5 5v27H12V24Z" fill="#fffdf8"/>
-    <path d="M27 13a5 5 0 0 1 5-5h1a5 5 0 0 1 5 5v38H27V13Z" fill="#d8ef70"/>
-    <path d="M42 21a5 5 0 0 1 5-5h1a5 5 0 0 1 5 5v30H42V21Z" fill="#fffdf8"/>
+    <path d="M11 25a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v28H11V25Z" fill="#102a56"/>
+    <path d="M27 13a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v40H27V13Z" fill="#2563eb"/>
+    <path d="M43 21a5 5 0 0 1 5-5h2a5 5 0 0 1 5 5v32H43V21Z" fill="#102a56"/>
+    <path d="M11 48h12v5H11zM27 48h12v5H27zM43 48h12v5H43z" fill="#081f42" opacity=".28"/>
   </g>
 </svg>

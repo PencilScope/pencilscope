@@ -1,0 +1,92 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/ebook-studio");
+type Ebook = {
+  id: string; title: string; subtitle: string; description: string; subject: string;
+  audience: string; status: string; chapter_count?: number; learning_product_id: string | null;
+  listing_status?: "listed" | "unpublished" | null; content_version?: number;
+};
+type Chapter = { id: string; title: string; content_json: string; position: number; version: number };
+const listResponse = await requestApi("/api/creator/ebooks", { userId });
+const ebooks = listResponse.ok ? (await listResponse.json<{ ebooks: Ebook[] }>()).ebooks : [];
+const selectedId = Astro.url.searchParams.get("id") ?? ebooks[0]?.id ?? "";
+let selected: Ebook | null = null;
+let chapters: Chapter[] = [];
+if (selectedId) {
+  const response = await requestApi(`/api/creator/ebooks/${encodeURIComponent(selectedId)}`, { userId });
+  if (response.ok) {
+    const data = await response.json<{ ebook: Ebook; chapters: Chapter[] }>();
+    selected = data.ebook;
+    chapters = data.chapters;
+  }
+}
+const chapterText = (chapter: Chapter) => {
+  try {
+    const parsed = JSON.parse(chapter.content_json) as { blocks?: Array<{ text?: string }> };
+    return (parsed.blocks ?? []).map((block) => block.text ?? "").join("\n\n");
+  } catch { return ""; }
+};
+---
+<BaseLayout title="Ebook studio — PencilScope">
+  <section class="dashboard-hero"><div class="shell"><a class="back-link" href="/create">← Creator hub</a><span class="eyebrow">Native ebook authoring</span><h1>Write, structure and publish.</h1><p>Create chapters in PencilScope, preview the reading experience and publish the ebook independently in the learning library.</p></div></section>
+  <section class="shell ebook-studio-layout">
+    <aside class="panel ebook-sidebar">
+      <span class="eyebrow">Your ebooks</span><nav>{ebooks.map((ebook) => <a class:list={{ active: ebook.id === selectedId }} href={`/ebook-studio?id=${ebook.id}`}><strong>{ebook.title}</strong><small>{ebook.status} · {ebook.chapter_count ?? 0} chapters</small></a>)}</nav>
+      <details open={!ebooks.length}><summary>＋ New ebook</summary><form class="stack-form ebook-api-form" action="/api/creator/ebooks" method="post">
+        <label>Title<input name="title" required /></label><label>Subtitle<input name="subtitle" /></label>
+        <label>Topic<input name="subject" required /></label><label>Audience<input name="audience" required /></label>
+        <label>Description<textarea name="description" minlength="20" required rows="4"></textarea></label>
+        <button class="button button-small" type="submit">Create draft</button><p class="form-message"></p>
+      </form></details>
+    </aside>
+    <main class="ebook-editor">
+      {!selected && <article class="panel library-empty"><h2>Create your first ebook.</h2><p>Start with the book details, then add and arrange chapters.</p></article>}
+      {selected && <><article class="panel ebook-editor-heading"><div><span class="eyebrow">{selected.status === "published" && selected.listing_status === "unpublished" ? "unpublished" : selected.status} · version {selected.content_version ?? 1}</span><h2>{selected.title}</h2><p>{selected.subtitle}</p></div><div>{selected.status === "published" && selected.listing_status !== "unpublished" && <a class="button button-small button-secondary" href={`/ebooks/${selected.id}`} target="_blank">Reader preview</a>}{selected.status === "draft" && <form class="ebook-api-form" action={`/api/creator/ebooks/${selected.id}/publish`} method="post"><button class="button button-small" type="submit">Publish ebook</button><p class="form-message"></p></form>}{selected.status === "draft" && <form class="ebook-api-form" data-method="DELETE" data-confirm="Delete this ebook draft permanently?" action={`/api/creator/ebooks/${selected.id}`} method="post"><button class="button button-small button-danger" type="submit">Delete draft</button><p class="form-message"></p></form>}{selected.status === "published" && <form class="ebook-api-form" action={`/api/creator/ebooks/${selected.id}/copy`} method="post"><button class="button button-small button-secondary" type="submit">Create new version</button><p class="form-message"></p></form>}{selected.status === "published" && selected.learning_product_id && <form class="ebook-api-form" action={`/api/creator/learning-products/${selected.learning_product_id}/${selected.listing_status === "unpublished" ? "republish" : "unpublish"}`} method="post"><button class="text-link" type="submit">{selected.listing_status === "unpublished" ? "Republish" : "Unpublish"}</button><p class="form-message"></p></form>}</div></article>
+        {selected.status === "draft" && <article class="panel">
+          <details class="studio-editor">
+            <summary>Edit ebook details</summary>
+            <form class="stack-form ebook-api-form" data-method="PATCH" action={`/api/creator/ebooks/${selected.id}`} method="post">
+              <div class="form-columns">
+                <label>Title<input name="title" required value={selected.title} /></label>
+                <label>Subtitle<input name="subtitle" value={selected.subtitle} /></label>
+                <label>Topic<input name="subject" required value={selected.subject} /></label>
+                <label>Audience<input name="audience" required value={selected.audience} /></label>
+              </div>
+              <label>Description<textarea name="description" minlength="20" required rows="4">{selected.description}</textarea></label>
+              <button class="button button-small button-secondary" type="submit">Save ebook details</button><p class="form-message"></p>
+            </form>
+          </details>
+        </article>}
+        <article class="panel"><span class="eyebrow">Table of contents</span><h2>Chapters</h2><div class="ebook-chapters">{chapters.map((chapter) => <details open><summary><span>{String(chapter.position).padStart(2, "0")}</span>{chapter.title}<small>Version {chapter.version}</small></summary>{selected.status === "draft" ? <form class="stack-form ebook-api-form" data-method="PATCH" action={`/api/creator/ebook-chapters/${chapter.id}`} method="post"><label>Chapter title<input name="title" value={chapter.title} required /></label><label>Chapter content<textarea name="content" rows="14" required>{chapterText(chapter)}</textarea></label><button class="button button-small button-secondary" type="submit">Save chapter</button><p class="form-message"></p></form> : <div class="ebook-readonly-chapter">{chapterText(chapter).split(/\n\n+/).map((paragraph) => <p>{paragraph}</p>)}</div>}</details>)}</div>
+          {selected.status === "draft" && <details class="new-chapter" open={!chapters.length}><summary>＋ Add chapter</summary><form class="stack-form ebook-api-form" action={`/api/creator/ebooks/${selected.id}/chapters`} method="post"><label>Chapter title<input name="title" required /></label><label>Chapter content<textarea name="content" rows="12" required placeholder="Write in clear paragraphs. Separate paragraphs with a blank line."></textarea></label><button class="button button-small" type="submit">Add chapter</button><p class="form-message"></p></form></details>}
+        </article></>}
+    </main>
+  </section>
+</BaseLayout>
+<script>
+  document.querySelectorAll<HTMLFormElement>(".ebook-api-form").forEach((form) => form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
+    const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+    const message = form.querySelector<HTMLElement>(".form-message");
+    if (button) button.disabled = true;
+    if (message) { message.className = "form-message"; message.textContent = "Saving…"; }
+    const body = Object.fromEntries(new FormData(form));
+    const response = await fetch(form.action, { method: form.dataset.method ?? "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const result = await response.json().catch(() => ({})) as { ebook?: { id?: string }; error?: { message?: string } };
+    if (!response.ok) {
+      if (message) { message.className = "form-error"; message.textContent = result.error?.message ?? "Could not save."; }
+      if (button) button.disabled = false;
+      return;
+    }
+    if ((form.dataset.method ?? "POST").toUpperCase() === "PATCH") {
+      if (message) { message.className = "form-message form-success"; message.textContent = "Saved."; }
+      if (button) button.disabled = false;
+      return;
+    }
+    location.href = form.dataset.method === "DELETE" ? "/ebook-studio" : result.ebook?.id ? `/ebook-studio?id=${encodeURIComponent(result.ebook.id)}` : location.href;
+  }));
+</script>

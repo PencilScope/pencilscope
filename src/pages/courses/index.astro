@@ -3,12 +3,71 @@ import CourseCard from "@/components/CourseCard.astro";
 import BaseLayout from "@/layouts/BaseLayout.astro";
 import { listPublishedCourses } from "@/lib/api-client";
 const courses = await listPublishedCourses();
+const query = Astro.url.searchParams.get("q")?.trim().slice(0, 100) ?? "";
+const requestedCategory = Astro.url.searchParams.get("category")?.trim() ?? "";
+const normalizedQuery = query.toLocaleLowerCase();
+const categoryOrder = ["Academic", "Enrichment", "Personal development", "Professional development", "Masterclass", "Knowledge sharing", "Seminar", "Workshop", "Coaching", "Certification preparation"];
+const categoryCounts = new Map<string, number>();
+for (const course of courses) {
+  const categories = course.categories.length ? course.categories : ["Other learning"];
+  for (const category of new Set(categories)) categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+}
+const categories = [...categoryCounts.keys()].sort((a, b) => {
+  const aIndex = categoryOrder.indexOf(a);
+  const bIndex = categoryOrder.indexOf(b);
+  if (aIndex !== -1 || bIndex !== -1) return (aIndex === -1 ? 999 : aIndex) - (bIndex === -1 ? 999 : bIndex);
+  return a.localeCompare(b);
+});
+const activeCategory = categories.includes(requestedCategory) ? requestedCategory : "";
+const matchingCourses = courses.filter((course) => {
+  const categoryMatch = !activeCategory || course.categories.includes(activeCategory);
+  if (!categoryMatch) return false;
+  if (!normalizedQuery) return true;
+  return [course.title, course.description, course.subject, course.level, course.deliveryMode, course.tutorName, ...course.categories, ...course.features]
+    .join(" ").toLocaleLowerCase().includes(normalizedQuery);
+});
+const visibleCategories = activeCategory
+  ? [activeCategory]
+  : categories.filter((category) => matchingCourses.some((course) => (course.categories[0] ?? "Other learning") === category));
+const groups = visibleCategories.map((category) => ({
+  category,
+  courses: matchingCourses.filter((course) => activeCategory
+    ? course.categories.includes(category)
+    : (course.categories[0] ?? "Other learning") === category)
+})).filter((group) => group.courses.length);
+const filterHref = (category = "") => {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (category) params.set("category", category);
+  const suffix = params.toString();
+  return suffix ? `/courses?${suffix}` : "/courses";
+};
 ---
 
 <BaseLayout title="Explore courses — PencilScope" description="Explore courses, workshops, seminars and masterclasses for every kind of learner.">
-  <section class="page-hero shell"><span class="eyebrow">Explore learning</span><h1>Learn something <em>worth sharing.</em></h1><p>Discover self-paced courses, live cohorts, workshops, seminars and in-person experiences created by people with knowledge to share.</p></section>
-  <section class="shell catalogue-section">
-    <div class="filter-bar" aria-label="Course categories"><span class="filter active">All learning</span><span class="filter">Academic</span><span class="filter">Enrichment</span><span class="filter">Masterclasses</span><span class="filter">Seminars</span><span class="result-count">{courses.length} courses</span></div>
-    <div class="course-grid">{courses.map((course) => <CourseCard course={course} />)}</div>
+  <section class="catalogue-hero"><div class="shell catalogue-hero-inner">
+    <div><span class="eyebrow">Explore learning</span><h1>Find your next course.</h1><p>Search complete learning experiences by topic, audience, creator or format.</p></div>
+    <form class="catalogue-search" action="/courses" method="get" role="search">
+      <label class="sr-only" for="course-catalogue-search">Search courses</label>
+      <span aria-hidden="true">⌕</span>
+      <input id="course-catalogue-search" name="q" type="search" value={query} placeholder="Search courses, topics, creators…" />
+      {activeCategory && <input type="hidden" name="category" value={activeCategory} />}
+      {query && <a href={filterHref(activeCategory)} aria-label="Clear search">Clear</a>}
+      <button class="button button-small" type="submit">Search</button>
+    </form>
+  </div></section>
+  <section class="shell catalogue-section compact-catalogue">
+    <nav class="catalogue-filters" aria-label="Course categories">
+      <a class:list={["filter", { active: !activeCategory }]} href={filterHref()}>All <span>{courses.length}</span></a>
+      {categories.map((category) => <a class:list={["filter", { active: activeCategory === category }]} href={filterHref(category)}>{category}<span>{categoryCounts.get(category)}</span></a>)}
+    </nav>
+    <div class="catalogue-summary" aria-live="polite">
+      <p><strong>{matchingCourses.length}</strong> {matchingCourses.length === 1 ? "course" : "courses"}{activeCategory && <> in <strong>{activeCategory}</strong></>}{query && <> matching <strong>“{query}”</strong></>}</p>
+      {(query || activeCategory) && <a class="text-link" href="/courses">Reset filters</a>}
+    </div>
+    {groups.length ? <div class="catalogue-groups">{groups.map((group) => <section class="catalogue-group" aria-labelledby={`category-${group.category.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}>
+      <header><div><span class="category-mark" aria-hidden="true"></span><h2 id={`category-${group.category.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}>{group.category}</h2></div><span>{group.courses.length} {group.courses.length === 1 ? "course" : "courses"}</span></header>
+      <div class="course-grid catalogue-course-grid">{group.courses.map((course) => <CourseCard course={course} compact />)}</div>
+    </section>)}</div> : <div class="panel catalogue-empty"><span aria-hidden="true">⌕</span><h2>No courses found</h2><p>Try a broader topic, another category, or the creator’s name.</p><a class="button button-secondary" href="/courses">Show all courses</a></div>}
   </section>
 </BaseLayout>

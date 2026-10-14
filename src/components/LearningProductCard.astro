@@ -1,0 +1,35 @@
+---
+import { learningProductMeta, type LearningProduct } from "@/lib/learning-products";
+import ProductIcon from "@/components/ProductIcon.astro";
+import { productCatalogueKey } from "@/lib/product-catalog";
+
+type Props = { product: LearningProduct; mode?: "catalogue" | "learning"; highlighted?: boolean };
+const { product, mode = "catalogue", highlighted = false } = Astro.props;
+const meta = learningProductMeta[product.product_type];
+const hasPricedOffer = Boolean(product.offer_course_slug && product.offer_title && product.offer_price_cents);
+const offerPrice = product.offer_price_cents ?? 0;
+const isLearningCard = mode === "learning";
+---
+<article class:list={["product-card", `product-${product.product_type}`, { "newly-enrolled-card": highlighted }]}>
+  <a class="product-card-link" href={`/library/${product.slug}`}>
+    <div class="product-card-top">
+      <ProductIcon name={productCatalogueKey(product.product_type)} />
+      <span class="product-type">{meta.label}</span>
+      {isLearningCard
+        ? <span class="product-price product-access-active">{highlighted ? "New" : "Enrolled"}</span>
+        : <span class:list={["product-price", !hasPricedOffer && "product-price-pending"]}>{hasPricedOffer ? new Intl.NumberFormat("en-SG", { style: "currency", currency: product.currency }).format(offerPrice / 100) : "Not for sale"}</span>}
+    </div>
+    <div class="product-card-body">
+      <span class="eyebrow">{product.subject}</span>
+      <h2>{product.title}</h2>
+      <p>{product.description}</p>
+      <div class="product-card-meta">
+        <span class="product-id">ID {product.id}</span>
+        <span>For {product.audience}</span>
+        {product.estimated_minutes && <span>{product.estimated_minutes} min</span>}
+        {meta.assessment && <span>{product.question_count ?? 0} questions</span>}
+      </div>
+    </div>
+    <div class="product-card-footer"><span>{isLearningCard ? (product.offer_title ? `Included with ${product.offer_title}` : "Available in My Learning") : (hasPricedOffer ? `Included in ${product.offer_title}` : "Creator preview only")}</span><strong>{isLearningCard ? meta.action : (hasPricedOffer ? "View offer" : "Preview product")} →</strong></div>
+  </a>
+</article>

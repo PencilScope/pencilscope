@@ -10,9 +10,30 @@
 	"observability": {
 		"enabled": true
 	},
+	"triggers": {
+		"crons": ["17 3 * * *"]
+	},
 	"vars": {
 		"APP_URL": "http://localhost:4321",
-		"ENVIRONMENT": "development"
+		"ENVIRONMENT": "development",
+		"ENABLE_AUTOMATIC_TRANSFERS": "false",
+		"PLATFORM_FEE_BPS": "1000",
+		"PLATFORM_FIXED_FEE_CENTS": "50",
+		"MIN_COURSE_PRICE_CENTS": "50",
+		"SETTLEMENT_REVIEW_DAYS": "7",
+		"CREATOR_RESERVE_BPS": "0",
+		"PLATFORM_MEETING_RATE_MICROS": "4000",
+		"FACEBOOK_GRAPH_VERSION": "v26.0",
+		"OAUTH_ALLOWED_REDIRECT_ORIGINS": "http://localhost:4321"
+		,"MCP_RESOURCE_ORIGINS": "http://localhost:8790",
+		"CONTENT_LIBRARY_MAX_IMAGE_BYTES": "250000000",
+		"CONTENT_LIBRARY_MAX_DOCUMENT_BYTES": "250000000",
+		"CONTENT_LIBRARY_MAX_AUDIO_BYTES": "1000000000",
+		"CONTENT_LIBRARY_MAX_VIDEO_BYTES": "2000000000",
+		"CONTENT_LIBRARY_DIRECT_UPLOAD_THRESHOLD_BYTES": "50000000",
+		"CONTENT_LIBRARY_MULTIPART_PART_BYTES": "10485760",
+		"CONTENT_LIBRARY_UPLOAD_RESUME_HOURS": "24",
+		"CONTENT_LIBRARY_RECOVERY_DAYS": "7"
 	},
 	"d1_databases": [
 		{
@@ -26,7 +47,11 @@
 		{
 			"binding": "MEDIA",
 			"bucket_name": "pencilscope-media"
-		}
+		},
+                {
+                    "binding": "ACTION_ARCHIVE",
+                    "bucket_name": "pencilscope-action-history"
+                }
 	],
 	"queues": {
 		"producers": [
@@ -39,9 +64,30 @@
 	"env": {
 		"uat": {
 			"workers_dev": false,
+			"triggers": {
+				"crons": ["17 3 * * *"]
+			},
 			"vars": {
 				"APP_URL": "https://pencilscope-uat.rdproducts-adm1.workers.dev",
-				"ENVIRONMENT": "uat"
+				"ENVIRONMENT": "uat",
+				"ENABLE_AUTOMATIC_TRANSFERS": "false",
+				"PLATFORM_FEE_BPS": "1000",
+				"PLATFORM_FIXED_FEE_CENTS": "50",
+				"MIN_COURSE_PRICE_CENTS": "50",
+				"SETTLEMENT_REVIEW_DAYS": "7",
+				"CREATOR_RESERVE_BPS": "0",
+				"PLATFORM_MEETING_RATE_MICROS": "4000",
+				"FACEBOOK_GRAPH_VERSION": "v26.0",
+				"OAUTH_ALLOWED_REDIRECT_ORIGINS": "https://pencilscope-uat.rdproducts-adm1.workers.dev",
+				"MCP_RESOURCE_ORIGINS": "https://pencilscope-mcp-uat.rdproducts-adm1.workers.dev",
+			"CONTENT_LIBRARY_MAX_IMAGE_BYTES": "250000000",
+			"CONTENT_LIBRARY_MAX_DOCUMENT_BYTES": "250000000",
+			"CONTENT_LIBRARY_MAX_AUDIO_BYTES": "1000000000",
+			"CONTENT_LIBRARY_MAX_VIDEO_BYTES": "2000000000",
+			"CONTENT_LIBRARY_DIRECT_UPLOAD_THRESHOLD_BYTES": "50000000",
+			"CONTENT_LIBRARY_MULTIPART_PART_BYTES": "10485760",
+			"CONTENT_LIBRARY_UPLOAD_RESUME_HOURS": "24",
+			"CONTENT_LIBRARY_RECOVERY_DAYS": "7"
 			},
 			"d1_databases": [
 				{
@@ -55,7 +101,11 @@
 				{
 					"binding": "MEDIA",
 					"bucket_name": "pencilscope-media-uat"
-				}
+				},
+                {
+                    "binding": "ACTION_ARCHIVE",
+                    "bucket_name": "pencilscope-action-history-uat"
+                }
 			],
 			"queues": {
 				"producers": [
@@ -68,9 +118,30 @@
 		},
 		"production": {
 			"workers_dev": false,
+			"triggers": {
+				"crons": ["17 3 * * *"]
+			},
 			"vars": {
 				"APP_URL": "https://pencilscope-production.rdproducts-adm1.workers.dev",
-				"ENVIRONMENT": "production"
+				"ENVIRONMENT": "production",
+				"ENABLE_AUTOMATIC_TRANSFERS": "false",
+				"PLATFORM_FEE_BPS": "1000",
+				"PLATFORM_FIXED_FEE_CENTS": "50",
+				"MIN_COURSE_PRICE_CENTS": "50",
+				"SETTLEMENT_REVIEW_DAYS": "7",
+				"CREATOR_RESERVE_BPS": "0",
+				"PLATFORM_MEETING_RATE_MICROS": "4000",
+				"FACEBOOK_GRAPH_VERSION": "v26.0",
+				"OAUTH_ALLOWED_REDIRECT_ORIGINS": "https://pencilscope.com,https://www.pencilscope.com,https://pencilscope-production.rdproducts-adm1.workers.dev",
+				"MCP_RESOURCE_ORIGINS": "https://pencilscope-mcp-production.rdproducts-adm1.workers.dev,https://mcp.pencilscope.com",
+			"CONTENT_LIBRARY_MAX_IMAGE_BYTES": "250000000",
+			"CONTENT_LIBRARY_MAX_DOCUMENT_BYTES": "250000000",
+			"CONTENT_LIBRARY_MAX_AUDIO_BYTES": "1000000000",
+			"CONTENT_LIBRARY_MAX_VIDEO_BYTES": "2000000000",
+			"CONTENT_LIBRARY_DIRECT_UPLOAD_THRESHOLD_BYTES": "50000000",
+			"CONTENT_LIBRARY_MULTIPART_PART_BYTES": "10485760",
+			"CONTENT_LIBRARY_UPLOAD_RESUME_HOURS": "24",
+			"CONTENT_LIBRARY_RECOVERY_DAYS": "7"
 			},
 			"d1_databases": [
 				{
@@ -84,7 +155,11 @@
 				{
 					"binding": "MEDIA",
 					"bucket_name": "pencilscope-media-production"
-				}
+				},
+                {
+                    "binding": "ACTION_ARCHIVE",
+                    "bucket_name": "pencilscope-action-history-production"
+                }
 			],
 			"queues": {
 				"producers": [

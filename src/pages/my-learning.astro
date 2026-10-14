@@ -1,0 +1,17 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import LearningProductCard from "@/components/LearningProductCard.astro";
+import { requestApi } from "@/lib/api-client";
+import type { LearningProduct } from "@/lib/learning-products";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/my-learning");
+const response = await requestApi("/api/my-learning-products", { userId });
+const products = response.ok ? (await response.json<{ products: LearningProduct[] }>()).products : [];
+---
+<BaseLayout title="My learning library — PencilScope">
+  <section class="dashboard-hero"><div class="shell"><a class="back-link" href="/dashboard?workspace=learning&section=learning">← My Learning</a><span class="eyebrow">My learning</span><h1>Your learning product library.</h1><p>Return to ebooks, readings, videos, audio and assessments you can access.</p></div></section>
+  <section class="shell library-layout">
+    {products.length ? <div class="product-grid">{products.map((product) => <LearningProductCard product={product} mode="learning" />)}</div> : <div class="panel library-empty"><h2>Your library is ready for something useful.</h2><p>Enrol in a learning product, take an assessment or browse complete courses.</p><div><a class="button" href="/library">Explore the library</a><a class="text-link" href="/courses">Browse courses →</a></div></div>}
+  </section>
+</BaseLayout>

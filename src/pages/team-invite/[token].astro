@@ -1,0 +1,69 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const token = Astro.params.token ?? "";
+const userId = await Astro.session?.get("userId");
+const response = await requestApi(
+  `/api/team-invitations/${encodeURIComponent(token)}`,
+  typeof userId === "string" ? { userId } : {}
+);
+type TeamInvitation = {
+  courseId: string; courseTitle: string; email: string; memberRole: string; roleLabel: string;
+  inviterName: string; personalMessage: string; status: string; expiresAt: string;
+  signedIn: boolean; emailMatches: boolean;
+};
+const invitation = response.ok
+  ? (await response.json<{ invitation: TeamInvitation }>()).invitation
+  : null;
+const next = `/team-invite/${encodeURIComponent(token)}`;
+---
+<BaseLayout title="Course team invitation — PencilScope">
+  <section class="shell team-invite-shell">
+    <article class="panel team-invite-card">
+      {!invitation ? <>
+        <span class="eyebrow">Invitation unavailable</span>
+        <h1>This invitation cannot be opened.</h1>
+        <p>It may have expired, been replaced, or already been used. Ask the course owner to send a new invitation.</p>
+        <a class="button" href="/dashboard">Open dashboard</a>
+      </> : <>
+        <span class="eyebrow">Course collaboration</span>
+        <h1>Join {invitation.courseTitle}</h1>
+        <p><strong>{invitation.inviterName}</strong> invited you to collaborate on this course. Access is limited to the role below and can be removed by the course owner.</p>
+        <div class="team-invite-facts">
+          <div><small>Role</small><strong>{invitation.roleLabel}</strong></div>
+          <div><small>Invited account</small><strong>{invitation.email}</strong></div>
+        </div>
+        {invitation.personalMessage && <blockquote>{invitation.personalMessage}</blockquote>}
+        {invitation.status !== "pending" ? <p class="form-message">This invitation is {invitation.status}.</p>
+          : !invitation.signedIn ? <div class="invitation-actions"><a class="button" href={`/sign-in?next=${encodeURIComponent(next)}`}>Sign in to accept</a><a class="text-link" href={`/register?next=${encodeURIComponent(next)}`}>Create an account with {invitation.email}</a></div>
+          : !invitation.emailMatches ? <p class="form-error">You are signed in with a different email. Sign out and use {invitation.email} to accept this invitation.</p>
+          : <form data-accept-team-invitation data-token={token}>
+            <button class="button" type="submit">Accept {invitation.roleLabel} access</button>
+            <p class="form-message" aria-live="polite">Access starts only after you accept.</p>
+          </form>}
+        <p class="role-help">Content editors can update draft course content but cannot publish, change pricing, manage payments, or invite other people. Co-host and facilitator access is limited to course delivery and learner support.</p>
+      </>}
+    </article>
+  </section>
+</BaseLayout>
+
+<script>
+  const form = document.querySelector<HTMLFormElement>("[data-accept-team-invitation]");
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector<HTMLButtonElement>("button");
+    const message = form.querySelector<HTMLElement>(".form-message");
+    if (button) button.disabled = true;
+    if (message) message.textContent = "Accepting invitation…";
+    const token = form.dataset.token ?? "";
+    const response = await fetch(`/api/team-invitations/${encodeURIComponent(token)}/accept`, { method: "POST" });
+    const result = await response.json() as { courseId?: string; error?: { message?: string } };
+    if (!response.ok) {
+      if (message) { message.className = "form-error"; message.textContent = result.error?.message ?? "The invitation could not be accepted."; }
+      if (button) button.disabled = false;
+      return;
+    }
+    location.href = `/tutor?courseId=${encodeURIComponent(result.courseId ?? "")}&section=overview`;
+  });
+</script>

@@ -1,0 +1,85 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import LearningProductCard from "@/components/LearningProductCard.astro";
+import { listPublishedLearningProducts, requestApi } from "@/lib/api-client";
+import { isLearningProductType, learningProductMeta, learningProductTypes, type LearningProduct } from "@/lib/learning-products";
+
+const requestedType = Astro.url.searchParams.get("type");
+const activeType = isLearningProductType(requestedType) ? requestedType : null;
+const products = await listPublishedLearningProducts(activeType ?? undefined);
+const userId = await Astro.session?.get("userId");
+let creatorProducts: LearningProduct[] = [];
+if (typeof userId === "string") {
+  const creatorResponse = await requestApi("/api/creator/learning-products", { userId });
+  if (creatorResponse.ok) {
+    creatorProducts = (await creatorResponse.json<{ products: LearningProduct[] }>()).products;
+  }
+}
+const relevantCreatorProducts = activeType
+  ? creatorProducts.filter((product) => product.product_type === activeType)
+  : creatorProducts;
+const existingCreatorProduct = relevantCreatorProducts.find((product) => product.status === "draft")
+  ?? relevantCreatorProducts.find((product) => product.listing_status === "unpublished")
+  ?? relevantCreatorProducts[0]
+  ?? null;
+const emptyProductType = activeType ?? existingCreatorProduct?.product_type ?? null;
+const emptyProductLabel = emptyProductType ? learningProductMeta[emptyProductType].label.toLowerCase() : "learning product";
+const createType = emptyProductType ?? "ebook";
+const createHref = `/create?type=${createType}#create-product`;
+const emptyActionHref = existingCreatorProduct
+  ? existingCreatorProduct.status === "draft"
+    ? `/create?edit=${existingCreatorProduct.id}#create-product`
+    : `/dashboard?workspace=creation&section=product&productId=${existingCreatorProduct.id}`
+  : typeof userId === "string"
+    ? createHref
+    : `/register?next=${encodeURIComponent(createHref)}`;
+const emptyHeading = existingCreatorProduct
+  ? existingCreatorProduct.status === "draft"
+    ? `Finish and publish your ${emptyProductLabel}`
+    : existingCreatorProduct.listing_status === "unpublished"
+      ? `Your ${emptyProductLabel} is ready to republish`
+      : `Complete pricing for your ${emptyProductLabel}`
+  : `Create your first ${emptyProductLabel} and sell it`;
+const emptyDescription = existingCreatorProduct
+  ? existingCreatorProduct.status === "draft"
+    ? "Complete the content, include it in a priced offer and publish it when it is ready for learners."
+    : existingCreatorProduct.listing_status === "unpublished"
+      ? "Review the content and pricing, then republish it when you are ready for learners to discover it."
+      : "Include this product in a priced, published offer so learners can discover and enrol in it."
+  : "Build the content, include it in a priced offer and publish it when it is ready for learners.";
+const emptyActionLabel = existingCreatorProduct
+  ? existingCreatorProduct.status === "draft" ? `Continue your ${emptyProductLabel}` : `Manage your ${emptyProductLabel}`
+  : `Create ${emptyProductLabel}`;
+---
+<BaseLayout
+  title="Explore learning — PencilScope"
+  description="Discover ebooks, readings, quizzes, tests, mock exams, videos and audio available through published PencilScope offers."
+>
+  <section class="library-hero">
+    <div class="shell library-hero-grid">
+      <div>
+        <span class="eyebrow">The learning library</span>
+        <h1>Find the format you need.<br /><em>Unlock it through an offer.</em></h1>
+        <p>Explore focused ebooks, quizzes, mock exams, video lessons and more. Every product shown here is available through a priced, published offer.</p>
+        <div class="hero-actions"><a class="button" href="#products">Explore the library</a><a class="button button-ghost" href="/courses">Browse full courses</a></div>
+      </div>
+      <div class="format-orbit" aria-label="Standalone learning formats">
+        {learningProductTypes.map((type) => <span class={`orbit-${type}`}><i>{learningProductMeta[type].symbol}</i>{learningProductMeta[type].label}</span>)}
+      </div>
+    </div>
+  </section>
+
+  <section class="shell library-layout" id="products">
+    <div class="library-heading">
+      <div><span class="eyebrow">{activeType ? learningProductMeta[activeType].plural : "All formats"}</span><h2>Choose what helps you move forward.</h2></div>
+      <a class="text-link" href="/create">Create and publish something →</a>
+    </div>
+    <nav class="product-filters" aria-label="Filter learning products">
+      <a class:list={{ active: !activeType }} href="/library">Everything</a>
+      {learningProductTypes.map((type) => <a class:list={{ active: activeType === type }} href={`/library?type=${type}`}>{learningProductMeta[type].plural}</a>)}
+    </nav>
+    {products.length
+      ? <div class="product-grid">{products.map((product) => <LearningProductCard product={product} />)}</div>
+      : <div class="panel library-empty"><span class="product-symbol">＋</span><span class="eyebrow">Creator opportunity</span><h2>{emptyHeading}</h2><p>{emptyDescription}</p><div><a class="button" href={emptyActionHref}>{emptyActionLabel}</a><a class="text-link" href="/courses">Browse courses →</a></div></div>}
+  </section>
+</BaseLayout>

@@ -1,0 +1,29 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { getEnv } from "@/lib/runtime";
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/integrations/mcp");
+const mcpUrl = getEnv(Astro.locals).MCP_SERVER_URL;
+---
+<BaseLayout title="AI creator connections — PencilScope" description="Connect PencilScope to ChatGPT, Claude and compatible AI assistants.">
+  <section class="creator-hub-hero mcp-hero">
+    <div class="shell"><span class="eyebrow">AI creator connections</span><h1>Create PencilScope products from your assistant.</h1><p>Connect your account securely, then ask ChatGPT, Claude or another MCP-compatible assistant to prepare product and course drafts.</p></div>
+  </section>
+  <section class="shell mcp-integration-layout">
+    <article class="panel mcp-connection-card">
+      <span class="eyebrow">Remote MCP server</span><h2>Your connection address</h2>
+      <div class="mcp-url-row"><code>{mcpUrl}</code><button class="button button-small button-secondary" type="button" data-copy-mcp>Copy</button></div>
+      <p>In your assistant, choose <strong>Add custom MCP server</strong> or <strong>Add custom connector</strong>, paste this address, and select OAuth when prompted.</p>
+      <ol class="mcp-steps"><li>Upload or save reusable sources in Content Library.</li><li>Connect, sign in and review the permissions requested.</li><li>Ask the assistant to list your library items and create a draft from the selected IDs.</li><li>Review the draft, pricing and learner experience before publishing.</li></ol>
+    </article>
+    <article class="panel mcp-capabilities"><span class="eyebrow">Available actions</span><h2>Designed for safe authoring</h2><div><span>Search private library</span><span>Audio & uploaded ebook drafts</span><span>Native ebook chapters</span><span>Video-course lessons</span><span>Assessment questions</span><span>Publication validation</span><span>Confirmed publishing</span></div><p>Only safe library metadata and item IDs are shared with the assistant. Storage keys remain private, and products remain subject to PencilScope’s ownership, pricing and publication rules.</p></article>
+  </section>
+</BaseLayout>
+<script>
+  document.querySelector("[data-copy-mcp]")?.addEventListener("click", async (event) => {
+    const code = document.querySelector<HTMLElement>(".mcp-url-row code");
+    if (!code) return;
+    await navigator.clipboard.writeText(code.textContent ?? "");
+    (event.currentTarget as HTMLButtonElement).textContent = "Copied";
+  });
+</script>

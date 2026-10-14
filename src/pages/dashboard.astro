@@ -1,6 +1,11 @@
 ---
 import BaseLayout from "@/layouts/BaseLayout.astro";
+import CreateWithAI from "@/components/CreateWithAI.astro";
+import ProductIcon from "@/components/ProductIcon.astro";
+import LearningProductCard from "@/components/LearningProductCard.astro";
 import { requestApi } from "@/lib/api-client";
+import type { LearningProduct } from "@/lib/learning-products";
+import { creatorProductCatalogue, productCatalogueKey, productDisplayLabel } from "@/lib/product-catalog";
 
 const userId = await Astro.session?.get("userId");
 if (typeof userId !== "string") return Astro.redirect("/sign-in");
@@ -32,60 +37,550 @@ const data = await response.json<{
     status: string;
     pricing_status: string;
     enrolment_count: number;
+    listing_status: string;
+    content_version: number;
   }>;
 }>();
+const requestedPeriod = ["30", "90", "365", "all"].includes(Astro.url.searchParams.get("period") ?? "")
+  ? Astro.url.searchParams.get("period")! : "all";
+const overviewResponse = await requestApi(`/api/creator/overview?period=${requestedPeriod}`, { userId });
+const creatorOverview = overviewResponse.ok ? await overviewResponse.json<{
+  period: string;
+  metrics: {
+    contentCount: number; moduleCount: number; lessonCount: number;
+    subscribedCount: number; completedCount: number; inProgressCount: number;
+  };
+  commerce: Array<{
+    currency: string; paymentCount: number; grossCents: number;
+    refundCents: number; payableCents: number;
+  }>;
+  content: Array<{
+    id: string; title: string; content_type: string; content_version: number;
+    description: string; subject: string; audience: string; delivery_mode: string | null;
+    content_url: string | null; estimated_minutes: number | null; can_edit: number;
+    display_status: string; updated_at: string; subscribed_count: number;
+    completed_count: number; in_progress_count: number;
+    ownership_scope: "owned" | "collaborating"; member_role: string;
+    attempt_count: number; average_score: number | null; passed_count: number;
+  }>;
+  auditLogs: Array<{
+    id: string; action: string; entity_type: string; entity_id: string | null;
+    metadata_json: string; created_at: string; actor_name: string;
+  }>;
+}>() : null;
 const displayName = data.user.organization_name ?? data.user.displayName ?? data.user.display_name;
 const error = Astro.url.searchParams.get("error");
 const added = Astro.url.searchParams.get("added");
+const enrolledCourseId = Astro.url.searchParams.get("enrolledCourse") ?? "";
+const enrolledCourseSlug = Astro.url.searchParams.get("enrolledSlug") ?? "";
+const workspace = Astro.url.searchParams.get("workspace") === "creation" ? "creation" : "learning";
+const allowedSections = workspace === "creation"
+  ? ["getting-started", "overview", "performance", "content", "product", "course-studio", "payments", "activity"]
+  : ["overview", "learning", "results", "payments"];
+const section = allowedSections.includes(Astro.url.searchParams.get("section") ?? "")
+  ? Astro.url.searchParams.get("section")!
+  : "overview";
+const sectionTitles: Record<string, string> = {
+  "getting-started": "Getting started",
+  overview: workspace === "creation" ? "Creation overview" : "Learning overview",
+  learning: "My learning",
+  results: "My results",
+  performance: "Product performance",
+  content: "My content",
+  product: "Product dashboard",
+  "course-studio": "Course studio",
+  payments: workspace === "creation" ? "Creator payments" : "Payment history",
+  activity: "Creation activity"
+};
+type CreatorPayment = {
+  id: string; amount_cents: number; currency: string; status: string; created_at: string;
+  course_title: string; offering_title: string | null; learner_name?: string; learner_email?: string;
+  gross_cents?: number | null; processing_fee_cents?: number | null; platform_fee_cents?: number | null;
+  meeting_usage_fee_cents?: number | null; refund_cents?: number | null; payable_cents?: number | null;
+  settlement_status?: string | null; review_ends_at?: string | null; transferred_at?: string | null;
+  issue_status?: string | null;
+};
+type CreatorPaymentSummary = {
+  currency: string; gross_cents: number; deduction_cents: number;
+  available_cents: number; transferred_cents: number; pending_cents: number;
+};
+let creatorPayments: { purchases: CreatorPayment[]; creatorSales: CreatorPayment[]; creatorSummary: CreatorPaymentSummary[] } = {
+  purchases: [], creatorSales: [], creatorSummary: []
+};
+if (section === "payments") {
+  const paymentsResponse = await requestApi("/api/payments", { userId });
+  if (paymentsResponse.ok) creatorPayments = await paymentsResponse.json();
+}
+let learningProducts: LearningProduct[] = [];
+if (workspace === "learning" && section === "learning") {
+  const learningProductsResponse = await requestApi("/api/my-learning-products", { userId });
+  if (learningProductsResponse.ok) {
+    learningProducts = (await learningProductsResponse.json<{ products: LearningProduct[] }>()).products;
+  }
+}
+type CourseAttempt = { id: string; title: string; assessment_type: string; course_title: string; status: string; started_at: string; submitted_at: string | null; score: number | null; passed: number | null };
+type StandaloneAttempt = { id: string; title: string; product_type: string; score: number; passed: number; submitted_at: string };
+let learningResults: { courseAttempts: CourseAttempt[]; standaloneAttempts: StandaloneAttempt[] } = {
+  courseAttempts: [], standaloneAttempts: []
+};
+if (workspace === "learning" && section === "results") {
+  const resultsResponse = await requestApi("/api/my-results", { userId });
+  if (resultsResponse.ok) learningResults = await resultsResponse.json();
+}
+type InlineStudio = {
+  course: { id: string; title: string; description: string; subject: string; primary_level: string; delivery_mode: string; status: string; listing_status: string; pricing_status: string };
+  modules: Array<{ id: string; title: string }>;
+  lessons: Array<{ id: string; module_id: string; title: string }>;
+  offerings: Array<{ id: string; title: string; status: string; pricing_status: string; planned_meeting_minutes: number }>;
+  sessions: Array<{ id: string; course_offering_id: string; title: string; delivery_mode: string; starts_at: string; ends_at: string; meeting_url: string | null; instructor_name: string | null }>;
+};
+const selectedCourseId = Astro.url.searchParams.get("courseId") ?? data.creatorCourses?.[0]?.id ?? "";
+let inlineStudio: InlineStudio | null = null;
+let inlineStudioError = "";
+let studioTeam: Array<{ user_id: string; display_name: string; member_role: string; status: string }> = [];
+if (workspace === "creation" && section === "course-studio" && selectedCourseId) {
+  const studioResponse = await requestApi(`/api/tutor/courses/${encodeURIComponent(selectedCourseId)}/studio`, { userId });
+  if (studioResponse.ok) inlineStudio = await studioResponse.json();
+  else inlineStudioError = "This course could not be opened in Course Studio.";
+  const teamResponse = await requestApi(`/api/tutor/courses/${encodeURIComponent(selectedCourseId)}/team`, { userId });
+  if (teamResponse.ok) studioTeam = (await teamResponse.json<{ members: typeof studioTeam }>()).members;
+}
+const selectedStudioOfferingId = Astro.url.searchParams.get("offeringId") ?? inlineStudio?.offerings[0]?.id ?? "";
+const selectedStudioOffering = inlineStudio?.offerings.find((offering) => offering.id === selectedStudioOfferingId);
+const money = (amount: number | null | undefined, currency = "SGD") => new Intl.NumberFormat("en-SG", {
+  style: "currency", currency
+}).format(Number(amount ?? 0) / 100);
+const commerceTotal = (creatorOverview?.commerce ?? []).map((entry) => money(entry.grossCents, entry.currency)).join(" · ") || money(0);
+const commercePayments = (creatorOverview?.commerce ?? []).reduce((total, entry) => total + entry.paymentCount, 0);
+const settlementLabel = (value: string | null | undefined) => ({
+  pending_course: "Course in progress", pending_usage: "Finalising class usage", review_period: "Learner review period",
+  held: "On hold", eligible: "Ready for payout", payout_setup_required: "Payout setup required",
+  transferring: "Sending payout", transferred: "Paid to creator", paid: "Paid to creator", zero_balance: "Settled",
+  reversal_required: "Review required", reversed: "Reversed"
+}[value ?? ""] ?? (value ?? "Not available").replaceAll("_", " "));
+const enrolments = data.enrolments ?? [];
+const newlyEnrolledCourse = enrolledCourseId
+  ? enrolments.find((enrolment) => enrolment.course_id === enrolledCourseId) ?? null
+  : null;
+const requestedLearningFilter = ["all", "courses", "books", "media", "assessments"].includes(Astro.url.searchParams.get("kind") ?? "")
+  ? Astro.url.searchParams.get("kind")! : "all";
+const productMatchesLearningFilter = (product: LearningProduct) => requestedLearningFilter === "all"
+  || (requestedLearningFilter === "books" && ["ebook", "audio"].includes(product.product_type))
+  || (requestedLearningFilter === "media" && ["video", "reading"].includes(product.product_type))
+  || (requestedLearningFilter === "assessments" && ["quiz", "test", "mock_exam"].includes(product.product_type));
+const visibleLearningProducts = requestedLearningFilter === "courses" ? [] : learningProducts.filter(productMatchesLearningFilter);
+const visibleCourseEnrolments = ["all", "courses"].includes(requestedLearningFilter) ? enrolments : [];
+const newlyEnrolledProducts = enrolledCourseSlug
+  ? learningProducts.filter((product) => product.offer_course_slug === enrolledCourseSlug)
+  : [];
+const learningItemCount = enrolments.length + learningProducts.length;
+const averageProgress = enrolments.length
+  ? Math.round(enrolments.reduce((total, enrolment) => total + Number(enrolment.progress_percent), 0) / enrolments.length)
+  : 0;
+const completedLearning = enrolments.filter((enrolment) => enrolment.status === "completed" || Number(enrolment.progress_percent) >= 100).length;
+const requestedScope = ["all", "owned", "collaborating"].includes(Astro.url.searchParams.get("scope") ?? "")
+  ? Astro.url.searchParams.get("scope")! : "all";
+const requestedStatus = ["all", "draft", "published", "unpublished", "archived"].includes(Astro.url.searchParams.get("status") ?? "")
+  ? Astro.url.searchParams.get("status")! : "all";
+const requestedType = Astro.url.searchParams.get("type") ?? "all";
+const requestedQuery = (Astro.url.searchParams.get("q") ?? "").trim().slice(0, 120);
+const requestedSort = ["learners", "completed", "completion", "updated"].includes(Astro.url.searchParams.get("sort") ?? "")
+  ? Astro.url.searchParams.get("sort")! : section === "content" ? "updated" : "learners";
+const productLabels: Record<string, string> = {
+  course: "Courses", ebook: "Ebooks", reading: "Reading materials", quiz: "Quizzes",
+  test: "Tests", mock_exam: "Mock exams", video: "Videos", audio: "Audio books"
+};
+const creationOptions = creatorProductCatalogue;
+const displayProductLabel = (item: { content_type: string; delivery_mode?: string | null }) =>
+  productDisplayLabel(item.content_type, item.delivery_mode);
+const statusCounts = creatorOverview?.content.reduce((counts, item) => {
+  counts.all += 1;
+  if (["draft", "published", "unpublished", "archived"].includes(item.display_status)) {
+    counts[item.display_status] += 1;
+  }
+  return counts;
+}, { all: 0, draft: 0, published: 0, unpublished: 0, archived: 0 } as Record<string, number>) ?? { all: 0, draft: 0, published: 0, unpublished: 0, archived: 0 };
+const productTypes = creatorOverview
+  ? [...new Set(creatorOverview.content.map((item) => item.content_type))]
+    .sort((left, right) => Object.keys(productLabels).indexOf(left) - Object.keys(productLabels).indexOf(right))
+  : [];
+const visibleContent = creatorOverview ? creatorOverview.content.filter((item) =>
+  (requestedScope === "all" || item.ownership_scope === requestedScope) &&
+  (requestedStatus === "all" || item.display_status === requestedStatus) &&
+  (requestedType === "all" || item.content_type === requestedType) &&
+  (!requestedQuery || `${item.id} ${item.title} ${item.subject} ${item.audience}`.toLowerCase().includes(requestedQuery.toLowerCase()))
+) : [];
+const completionRate = (item: { subscribed_count: number; completed_count: number }) =>
+  Number(item.subscribed_count) > 0 ? Math.round(Number(item.completed_count) / Number(item.subscribed_count) * 100) : 0;
+visibleContent.sort((left, right) => requestedSort === "updated"
+  ? right.updated_at.localeCompare(left.updated_at)
+  : requestedSort === "completed"
+    ? Number(right.completed_count) - Number(left.completed_count)
+    : requestedSort === "completion"
+      ? completionRate(right) - completionRate(left)
+      : Number(right.subscribed_count) - Number(left.subscribed_count));
+const contentStatusGroups = [
+  { key: "draft", label: "Drafts", description: "Work in progress that only you and your collaborators can see." },
+  { key: "published", label: "Published", description: "Live products that can be included in priced offers." },
+  { key: "unpublished", label: "Unpublished", description: "Products removed from new enrolment while learner records stay protected." },
+  { key: "archived", label: "Archived", description: "Inactive products retained for records and audit history." }
+].map((group) => ({ ...group, items: visibleContent.filter((item) => item.display_status === group.key) }));
+const requestedGettingStartedProduct = Astro.url.searchParams.get("product") ?? "";
+const gettingStartedProduct = creatorProductCatalogue.find((item) => item.key === requestedGettingStartedProduct) ?? null;
+const requestedGettingStartedStep = Number(Astro.url.searchParams.get("step") ?? (gettingStartedProduct ? "2" : "1"));
+const gettingStartedStep = Math.min(5, Math.max(1, Number.isFinite(requestedGettingStartedStep) ? requestedGettingStartedStep : 1));
+const gettingStartedSteps = ["Choose product", "Create draft", "Build content", "Price & access", "Review & publish"];
+const gettingStartedDrafts = creatorOverview?.content.filter((item) => item.display_status === "draft").slice(0, 5) ?? [];
+const performanceByType = [...visibleContent.reduce((groups, item) => {
+  const current = groups.get(item.content_type) ?? {
+    contentType: item.content_type, productCount: 0, publishedCount: 0, learnerCount: 0,
+    activeCount: 0, completedCount: 0, attemptCount: 0, passedCount: 0, scoreTotal: 0
+  };
+  current.productCount += 1;
+  current.publishedCount += item.display_status === "published" ? 1 : 0;
+  current.learnerCount += Number(item.subscribed_count);
+  current.activeCount += Number(item.in_progress_count);
+  current.completedCount += Number(item.completed_count);
+  current.attemptCount += Number(item.attempt_count ?? 0);
+  current.passedCount += Number(item.passed_count ?? 0);
+  current.scoreTotal += Number(item.average_score ?? 0) * Number(item.attempt_count ?? 0);
+  groups.set(item.content_type, current);
+  return groups;
+}, new Map<string, {
+  contentType: string; productCount: number; publishedCount: number; learnerCount: number;
+  activeCount: number; completedCount: number; attemptCount: number; passedCount: number; scoreTotal: number;
+}>()).values()].sort((left, right) => right.learnerCount - left.learnerCount);
+const selectedProductId = Astro.url.searchParams.get("productId") ?? "";
+const selectedProduct = creatorOverview?.content.find((item) => item.id === selectedProductId) ?? null;
+const productTabs = ["overview", "content", "learners", "performance", "offers", "versions", "activity", "settings"] as const;
+const requestedProductTab = Astro.url.searchParams.get("tab") ?? "overview";
+const productTab = productTabs.includes(requestedProductTab as typeof productTabs[number])
+  ? requestedProductTab as typeof productTabs[number] : "overview";
+let selectedProductDetail: LearningProduct | null = null;
+if (workspace === "creation" && section === "product" && selectedProduct && selectedProduct.content_type !== "course") {
+  const productsResponse = await requestApi("/api/creator/learning-products", { userId });
+  if (productsResponse.ok) {
+    selectedProductDetail = (await productsResponse.json<{ products: LearningProduct[] }>()).products
+      .find((product) => product.id === selectedProduct.id) ?? null;
+  }
+}
+const productDashboardUrl = (tab: typeof productTabs[number]) =>
+  `/dashboard?workspace=creation&section=product&productId=${encodeURIComponent(selectedProductId)}&tab=${tab}`;
+const selectedCompletionRate = selectedProduct ? completionRate(selectedProduct) : 0;
+const selectedPassRate = selectedProduct && Number(selectedProduct.attempt_count) > 0
+  ? Math.round(Number(selectedProduct.passed_count) / Number(selectedProduct.attempt_count) * 100) : 0;
+const selectedProductActivity = creatorOverview?.auditLogs.filter((entry) => entry.entity_id === selectedProductId).slice(0, 20) ?? [];
+const isAssessmentDashboard = selectedProduct ? ["quiz", "test", "mock_exam"].includes(selectedProduct.content_type) : false;
+const selectedCourseRecord = data.creatorCourses?.find((course) => course.id === selectedProductId) ?? null;
+const selectedContentReady = selectedProduct?.content_type === "course"
+  ? selectedProduct.display_status !== "draft"
+  : isAssessmentDashboard
+    ? Number(selectedProductDetail?.question_count ?? 0) > 0
+    : Boolean(selectedProductDetail?.content_url);
+const selectedOfferReady = selectedProduct?.content_type === "course"
+  ? selectedCourseRecord?.pricing_status === "ready"
+  : Boolean(selectedProductDetail?.offer_title);
+const selectedJourneyLabels = selectedProduct?.content_type === "course"
+  ? selectedProduct.delivery_mode === "live" ? ["Learning promise", "Curriculum", "Online sessions", "Offer & price", "Publish"]
+    : selectedProduct.delivery_mode === "hybrid" ? ["Learning promise", "Curriculum", "Venue & schedule", "Offer & price", "Publish"]
+      : ["Learning promise", "Modules & media", "Learner preview", "Offer & price", "Publish"]
+  : selectedProduct?.content_type === "ebook" ? ["Book details", "Chapters", "Reader preview", "Offer & price", "Publish"]
+    : selectedProduct?.content_type === "audio" ? ["Book details", "Audio content", "Listening preview", "Offer & price", "Publish"]
+      : selectedProduct?.content_type === "video" ? ["Learning promise", "Video content", "Playback preview", "Offer & price", "Publish"]
+        : isAssessmentDashboard ? ["Assessment details", "Questions", "Attempt preview", "Offer & price", "Publish"]
+          : ["Product details", "Content", "Learner preview", "Offer & price", "Publish"];
+const selectedJourneyComplete = [Boolean(selectedProduct), selectedContentReady, selectedContentReady, selectedOfferReady, selectedProduct?.display_status === "published"];
+const selectedJourneyCurrent = selectedJourneyComplete.findIndex((complete) => !complete);
+const selectedEditorUrl = selectedProduct?.content_type === "course"
+  ? `/dashboard?workspace=creation&section=course-studio&courseId=${encodeURIComponent(selectedProductId)}${selectedProduct?.display_status === "draft" ? "&edit=details" : ""}`
+  : `/create?edit=${encodeURIComponent(selectedProductId)}#create-product`;
+const selectedPublicUrl = selectedProduct?.content_type === "course"
+  ? selectedCourseRecord?.slug ? `/courses/${selectedCourseRecord.slug}` : null
+  : selectedProductDetail?.slug ? `/library/${selectedProductDetail.slug}` : null;
+const productPortfolio = [
+  { key: "course", label: "Courses", types: ["course"] },
+  { key: "assessment", label: "Assessments", types: ["quiz", "test", "mock_exam"] },
+  { key: "reading", label: "Ebooks & reading", types: ["ebook", "reading"] },
+  { key: "media", label: "Video & audio books", types: ["video", "audio"] }
+].map((group) => {
+  const products = creatorOverview?.content.filter((item) => group.types.includes(item.content_type)) ?? [];
+  return {
+    ...group,
+    products: products.length,
+    published: products.filter((item) => item.display_status === "published").length,
+    learners: products.reduce((total, item) => total + Number(item.subscribed_count), 0),
+    completed: products.reduce((total, item) => total + Number(item.completed_count), 0)
+  };
+});
+const pageTitle = section === "product" && selectedProduct ? selectedProduct.title : sectionTitles[section];
 ---
-<BaseLayout title="Dashboard — PencilScope">
-  <section class="dashboard-hero">
-    <div class="shell">
-      <span class="eyebrow">Your PencilScope</span>
-      <h1>Welcome, {displayName}.</h1>
-      <p>Continue learning, support your learners, or shape the next great course.</p>
-    </div>
-  </section>
-  <section class="shell dashboard-grid">
-    {error && <p class="form-error dashboard-message" role="alert">{error}</p>}
-    {added && <p class="form-success dashboard-message">Learner profile created.</p>}
+<BaseLayout title={`${pageTitle} — PencilScope`}>
+  <section class="dashboard-hero dashboard-hero-compact"><div class="shell dashboard-hero-row"><div><span class="eyebrow">{section === "product" ? "Product dashboard" : "Your PencilScope"}</span><h1>{pageTitle}</h1><p>{section === "product" && selectedProduct ? `${displayProductLabel(selectedProduct)} · ID ${selectedProduct.id} · version ${selectedProduct.content_version ?? 1} · ${selectedProduct.display_status}` : `Welcome, ${displayName}. ${workspace === "learning" ? "Continue where you left off." : "Build, manage and measure your learning products."}`}</p></div>{workspace === "creation" && <div class="dashboard-hero-actions"><CreateWithAI compact /><details class="create-product-menu"><summary class="button button-small">+ Create content <span aria-hidden="true">⌄</span></summary><div class="create-product-popover">{creationOptions.map((option) => <a href={option.href}><ProductIcon name={option.key} size="small" /><span><strong>{option.label}</strong><small>{option.shortDescription}</small></span></a>)}</div></details></div>}</div></section>
+  <section class="shell workspace-dashboard-layout">
+    <aside class="panel dashboard-sidebar">
+      <div class="dashboard-nav-group"><span>{workspace === "learning" ? "Learning workspace" : "Creation workspace"}</span><nav class="dashboard-side-links" aria-label={`${workspace} workspace sections`}>{workspace === "creation" && <a class:list={{ active: section === "getting-started" }} aria-current={section === "getting-started" ? "page" : undefined} href="/dashboard?workspace=creation&section=getting-started">Getting started</a>}<a class:list={{ active: section === "overview" }} aria-current={section === "overview" ? "page" : undefined} href={`/dashboard?workspace=${workspace}&section=overview`}>Overview</a>{workspace === "learning" ? <><a class:list={{ active: section === "learning" }} aria-current={section === "learning" ? "page" : undefined} href="/dashboard?workspace=learning&section=learning">My learning</a><a class:list={{ active: section === "results" }} aria-current={section === "results" ? "page" : undefined} href="/dashboard?workspace=learning&section=results">Results</a><a class:list={{ active: section === "payments" }} aria-current={section === "payments" ? "page" : undefined} href="/dashboard?workspace=learning&section=payments">Payment history</a><a href="/library">Explore library</a></> : <><a class:list={{ active: section === "performance" }} aria-current={section === "performance" ? "page" : undefined} href="/dashboard?workspace=creation&section=performance">Performance</a><a class:list={{ active: section === "content" || section === "product" }} aria-current={section === "content" ? "page" : undefined} href="/dashboard?workspace=creation&section=content">All products <b>{statusCounts.all}</b></a><a class:list={{ active: section === "course-studio" }} aria-current={section === "course-studio" ? "page" : undefined} href="/dashboard?workspace=creation&section=course-studio">Course studio</a><a class:list={{ active: section === "payments" }} aria-current={section === "payments" ? "page" : undefined} href="/dashboard?workspace=creation&section=payments">Payments</a><a class:list={{ active: section === "activity" }} aria-current={section === "activity" ? "page" : undefined} href="/dashboard?workspace=creation&section=activity">Activity</a></>}</nav></div>
+      {workspace === "creation" && <div class="dashboard-nav-group dashboard-resource-links"><span>Source library</span><nav class="dashboard-side-links" aria-label="Private creator content"><a href="/content-library">Content Library</a></nav></div>}
+      <div class="dashboard-nav-group dashboard-resource-links"><span>Network</span><nav class="dashboard-side-links" aria-label="Network and communication"><a href="/network?section=messages">Messages</a><a href="/network">Network</a></nav></div>
+      {workspace === "creation" && <details class="create-product-menu dashboard-create-menu"><summary class="button dashboard-create-button">+ Create content <span aria-hidden="true">⌄</span></summary><div class="create-product-popover">{creationOptions.map((option) => <a href={option.href}><ProductIcon name={option.key} size="small" /><span><strong>{option.label}</strong><small>{option.shortDescription}</small></span></a>)}</div></details>}
+    </aside>
+    <main class="dashboard-content">
+      {error && <p class="form-error dashboard-message" role="alert">{error}</p>}{added && <p class="form-success dashboard-message">Learner profile created.</p>}
+      {workspace === "learning" && section === "learning" && newlyEnrolledCourse && <div class="form-success dashboard-message enrolment-added-banner" role="status"><span aria-hidden="true">✓</span><div><strong>Enrolment confirmed</strong><p><b>{newlyEnrolledCourse.title}</b>{newlyEnrolledProducts.length ? ` and ${newlyEnrolledProducts.length} included product${newlyEnrolledProducts.length === 1 ? "" : "s"} have` : " has"} been added to My Learning.</p></div><a class="button button-small" href={`/learn/${newlyEnrolledCourse.course_id}`}>Start learning</a></div>}
 
-    {data.user.account_type === "individual" && data.user.role !== "student" && (
-        <article class="panel">
-          <span class="eyebrow">Linked learners</span>
-          <h2>People you support</h2>
-          {data.students?.length ? (
-            <div class="learner-list">
-              {data.students.map((student) => (
-                <div><span class="tutor-avatar">{student.display_name.slice(0, 1)}</span><p><strong>{student.display_name}</strong><small>{student.primary_level}</small></p></div>
-              ))}
-            </div>
-          ) : <p>You can enrol yourself now, or add a learner you manage.</p>}
-          <form class="stack-form compact-form" action="/api/students" method="post">
-            <label>Learner name<input name="displayName" required minlength="2" /></label>
-            <label>Learning stage<input name="primaryLevel" required minlength="2" maxlength="40" placeholder="Beginner, Primary 5, professional…" /></label>
-            <button class="button" type="submit">Add learner</button>
-          </form>
+      {workspace === "learning" && section === "overview" && <><div class="learning-metric-grid"><section><strong>{enrolments.length}</strong><span>Active learning</span></section><section><strong>{averageProgress}%</strong><span>Average progress</span></section><section><strong>{completedLearning}</strong><span>Completed</span></section></div><article class="panel dashboard-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Learning access</span><h2>Continue learning</h2></div><a class="text-link" href="/dashboard?workspace=learning&section=learning">View all learning →</a></div>{enrolments.length ? <div class="dashboard-learning-list">{enrolments.slice(0, 6).map((enrolment) => { const learnerQuery = enrolment.student_user_id === data.user.id ? "" : `?studentId=${encodeURIComponent(enrolment.student_user_id)}`; const progress = Math.round(enrolment.progress_percent); return <a href={`/learn/${enrolment.course_id}${learnerQuery}`}><div><span>{enrolment.subject} · {enrolment.offering_title}</span><strong>{enrolment.title}</strong></div><div class="learning-row-progress"><small>{progress}% complete</small><progress value={progress} max="100"></progress></div><b>Continue</b></a>; })}</div> : <div class="dashboard-empty"><h3>Your learning space is ready</h3><p>Explore courses and learning products to begin.</p><a class="button button-small" href="/courses">Explore learning</a></div>}</article></>}
+
+      {workspace === "learning" && section === "learning" && <article class="panel dashboard-section-panel enrolled-learning-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Your learning</span><h2>All enrolled products</h2><p>Continue courses, books, media and assessments from one place.</p></div><div class="learning-header-actions"><span>{learningItemCount} product{learningItemCount === 1 ? "" : "s"}</span><a class="button button-small button-secondary" href="/courses">Explore learning</a></div></div><nav class="learning-filter-bar" aria-label="Filter enrolled products">{[{ key: "all", label: "All" }, { key: "courses", label: "Courses" }, { key: "books", label: "Books & audio" }, { key: "media", label: "Video & reading" }, { key: "assessments", label: "Assessments" }].map((filter) => <a class:list={{ active: requestedLearningFilter === filter.key }} aria-current={requestedLearningFilter === filter.key ? "page" : undefined} href={`/dashboard?workspace=learning&section=learning&kind=${filter.key}`}>{filter.label}</a>)}</nav>{visibleCourseEnrolments.length || visibleLearningProducts.length ? <div class="product-grid dashboard-product-grid enrolled-product-grid">{visibleCourseEnrolments.map((enrolment) => { const learnerQuery = enrolment.student_user_id === data.user.id ? "" : `?studentId=${encodeURIComponent(enrolment.student_user_id)}`; const progress = Math.round(enrolment.progress_percent); const highlighted = enrolment.course_id === enrolledCourseId; return <article class:list={["product-card", "learning-course-card", { "newly-enrolled-card": highlighted }]}><a class="product-card-link" href={`/learn/${enrolment.course_id}${learnerQuery}`}><div class="product-card-top"><ProductIcon name="course" /><span class="product-type">Course</span><span class="product-price product-access-active">{highlighted ? "New" : "Enrolled"}</span></div><div class="product-card-body"><span class="eyebrow">{enrolment.subject}</span><h2>{enrolment.title}</h2><p>Continue your learning through the modules and products included with this enrolment.</p><div class="product-card-meta"><span>{enrolment.offering_title}</span><span>{progress >= 100 ? "Completed" : `${progress}% complete`}</span></div><progress class="learning-card-progress" value={progress} max="100"></progress></div><div class="product-card-footer"><span>Included with {enrolment.offering_title}</span><strong>{progress >= 100 ? "Review" : progress > 0 ? "Continue" : "Start"} →</strong></div></a></article>; })}{visibleLearningProducts.map((product) => <LearningProductCard product={product} mode="learning" highlighted={Boolean(enrolledCourseSlug && product.offer_course_slug === enrolledCourseSlug)} />)}</div> : <div class="dashboard-empty"><h3>{learningItemCount ? "No products match this filter" : "Your learning space is ready"}</h3><p>{learningItemCount ? "Choose another product type to continue learning." : "Enrol in a course or add a learning product to begin."}</p><a class="button button-small" href={learningItemCount ? "/dashboard?workspace=learning&section=learning&kind=all" : "/courses"}>{learningItemCount ? "Show all products" : "Explore learning"}</a></div>}</article>}
+
+      {workspace === "learning" && section === "results" && <><article class="panel dashboard-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Course assessments</span><h2>Course attempt history</h2><p>Quiz, test and mock-exam results from your enrolled courses.</p></div></div>{learningResults.courseAttempts.length ? <div class="result-history">{learningResults.courseAttempts.map((attempt) => <section><div><strong>{attempt.title}</strong><small>{attempt.course_title} · {attempt.assessment_type.replaceAll("_", " ")}</small></div><span class:list={["result-score", { passed: attempt.passed }]}>{attempt.score === null ? attempt.status : `${attempt.score}%`}</span><small>{new Date(attempt.submitted_at ?? attempt.started_at).toLocaleString("en-SG")}</small></section>)}</div> : <p class="form-message">No course assessment attempts yet.</p>}</article><article class="panel dashboard-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Learning assessments</span><h2>Product attempt history</h2><p>Results from quizzes, tests and mock exams in your learning library.</p></div></div>{learningResults.standaloneAttempts.length ? <div class="result-history">{learningResults.standaloneAttempts.map((attempt) => <section><div><strong>{attempt.title}</strong><small>{attempt.product_type.replaceAll("_", " ")}</small></div><span class:list={["result-score", { passed: attempt.passed }]}>{attempt.score}%</span><small>{new Date(attempt.submitted_at).toLocaleString("en-SG")}</small></section>)}</div> : <p class="form-message">No learning product assessment attempts yet.</p>}</article></>}
+
+      {workspace === "learning" && section === "payments" && <article class="panel dashboard-section-panel learner-payments-inline"><div class="dashboard-section-heading"><div><span class="eyebrow">Your purchases</span><h2>Learning payment history</h2><p>Review the amount, date and status of every learning purchase.</p></div></div>{creatorPayments.purchases.length ? <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Learning product</th><th>Date</th><th>Status</th><th>Amount</th><th>Help</th></tr></thead><tbody>{creatorPayments.purchases.map((payment) => <tr><td><strong>{payment.course_title}</strong><small>{payment.offering_title}</small></td><td>{new Date(payment.created_at).toLocaleString("en-SG")}</td><td><span class:list={["settlement-status", payment.issue_status ? "held" : payment.status]}>{payment.issue_status ? "Issue under review" : payment.status}</span></td><td>{money(payment.amount_cents, payment.currency)}</td><td>{payment.status === "paid" && !payment.issue_status ? <details class="payment-issue"><summary>Report issue</summary><form class="payment-issue-form" data-order-id={payment.id}><label>What went wrong?<textarea name="reason" minlength="10" maxlength="2000" rows="3" required></textarea></label><label>Request type<select name="caseType"><option value="service_issue">Learning service issue</option><option value="refund_request">Request a refund review</option></select></label><button class="button button-secondary button-small" type="submit">Send for review</button><p class="form-message" aria-live="polite"></p></form></details> : payment.issue_status ? <small>We will review this before releasing the creator payout.</small> : "—"}</td></tr>)}</tbody></table></div> : <div class="dashboard-empty"><h3>No learning payments yet</h3><p>Your completed purchases will appear here.</p><a class="button button-small" href="/courses">Explore learning</a></div>}</article>}
+
+      {workspace === "creation" && section === "getting-started" && <article class="panel dashboard-section-panel getting-started-panel">
+        <div class="dashboard-section-heading"><div><span class="eyebrow">Guided product setup</span><h2>Create a product, step by step</h2><p>Start with a private draft, build the learning experience, set a valid price and publish only when everything is ready.</p></div>{gettingStartedDrafts.length > 0 && <a class="text-link" href="/dashboard?workspace=creation&section=content&status=draft">Resume a draft →</a>}</div>
+        <ol class="creator-stepper" aria-label="Product creation progress">{gettingStartedSteps.map((label, index) => <li class:list={{ active: gettingStartedStep === index + 1, complete: gettingStartedStep > index + 1 }}><span>{gettingStartedStep > index + 1 ? "✓" : index + 1}</span><strong>{label}</strong></li>)}</ol>
+        {gettingStartedStep === 1 && <form class="getting-started-form" method="get" action="/dashboard"><input type="hidden" name="workspace" value="creation" /><input type="hidden" name="section" value="getting-started" /><input type="hidden" name="step" value="2" /><fieldset><legend>What do you want to create?</legend><div class="getting-started-product-grid">{creationOptions.map((option) => <label><input type="radio" name="product" value={option.key} required /><span class="getting-started-product-card"><ProductIcon name={option.key} /><strong>{option.label}</strong><small>{option.shortDescription}</small></span></label>)}</div></fieldset><div class="getting-started-actions"><button class="button" type="submit">Continue</button></div></form>}
+        {gettingStartedStep === 2 && gettingStartedProduct && <section class="getting-started-stage"><div class="getting-started-stage-heading"><ProductIcon name={gettingStartedProduct.key} /><div><span class="eyebrow">Step 2 of 5</span><h3>Create your {gettingStartedProduct.label.toLowerCase()} draft</h3><p>Your draft stays private. You can leave and resume it from All products at any time.</p></div></div>{["online_course", "in_person_course", "video_course"].includes(gettingStartedProduct.key) ? <form class="inline-studio-form dashboard-api-form" data-kind="course" action="/api/tutor/courses"><div class="inline-editor-grid"><label>Title<input name="title" required minlength="3" placeholder="A clear learner-focused title" /></label><label>Topic<input name="subject" required placeholder="Mathematics, leadership, design…" /></label><label>Audience<input name="primaryLevel" required placeholder="Beginners, Secondary 4, managers…" /></label><label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing">Knowledge sharing</option></select></label></div><input type="hidden" name="deliveryMode" value={gettingStartedProduct.key === "online_course" ? "live" : gettingStartedProduct.key === "in_person_course" ? "hybrid" : "self-paced"} /><label>Description<textarea name="description" required minlength="20" rows="4" placeholder="Explain what learners will achieve."></textarea></label><p class="meet-assurance"><strong>Draft first:</strong> Add content now. Pricing and publication are completed later, after the learner experience is ready.</p><button class="button" type="submit">Save draft and build content</button><p class="form-message" aria-live="polite"></p></form> : <div class="specialist-editor-card"><div><strong>Open the {gettingStartedProduct.label} editor</strong><p>This format has a purpose-built editor for chapters, media links or multiple assessment questions.</p></div><a class="button" href={gettingStartedProduct.href}>Create draft</a></div>}<nav class="getting-started-actions"><a class="button button-secondary" href="/dashboard?workspace=creation&section=getting-started">Back</a></nav></section>}
+        {gettingStartedStep >= 3 && gettingStartedProduct && <section class="getting-started-stage"><div class="getting-started-stage-heading"><ProductIcon name={gettingStartedProduct.key} /><div><span class="eyebrow">Step {gettingStartedStep} of 5</span><h3>{gettingStartedSteps[gettingStartedStep - 1]}</h3><p>{gettingStartedStep === 3 ? "Add the complete learner experience in the product editor." : gettingStartedStep === 4 ? "Set learner pricing and include the product in an offer. Nothing is visible to other users before the offer is priced and published." : "Preview the learner experience, check access and publish when it is ready."}</p></div></div><div class="getting-started-checklist">{gettingStartedStep === 3 ? <><span>✓ Add lessons, chapters, media or questions</span><span>✓ Check the learner overview</span><span>✓ Save changes to the draft</span></> : gettingStartedStep === 4 ? <><span>✓ Set a learner price</span><span>✓ Confirm platform and online meeting costs</span><span>✓ Choose who can enrol</span></> : <><span>✓ Preview the complete product</span><span>✓ Confirm content and pricing readiness</span><span>✓ Publish the product and its offer</span></>}</div><nav class="getting-started-actions"><a class="button button-secondary" href={`/dashboard?workspace=creation&section=getting-started&product=${gettingStartedProduct.key}&step=${gettingStartedStep - 1}`}>Back</a><a class="button button-secondary" href={gettingStartedStep === 3 ? gettingStartedProduct.href : "/dashboard?workspace=creation&section=content&status=draft"}>{gettingStartedStep === 3 ? "Open product editor" : "Open drafts"}</a>{gettingStartedStep < 5 ? <a class="button" href={`/dashboard?workspace=creation&section=getting-started&product=${gettingStartedProduct.key}&step=${gettingStartedStep + 1}`}>Continue</a> : <a class="button" href="/dashboard?workspace=creation&section=content">View all products</a>}</nav></section>}
+        {gettingStartedDrafts.length > 0 && <section class="getting-started-resume"><div><span class="eyebrow">Continue working</span><h3>Recent drafts</h3></div><div>{gettingStartedDrafts.map((item) => <a href={`/dashboard?workspace=creation&section=product&productId=${item.id}`}><ProductIcon name={productCatalogueKey(item.content_type, item.delivery_mode)} size="small" /><span><strong>{item.title}</strong><small>{displayProductLabel(item)} · ID {item.id}</small></span><b>Resume →</b></a>)}</div></section>}
+      </article>}
+
+      {workspace === "creation" && section === "overview" && <article class="panel dashboard-section-panel creation-summary"><div class="dashboard-section-heading"><div><span class="eyebrow">Creation overview</span><h2>Your content at a glance</h2></div><a class="text-link" href="/dashboard?workspace=creation&section=performance">View performance →</a></div>{creatorOverview && <><div class="creator-metric-grid creator-commerce-grid"><section><strong>{creatorOverview.metrics.contentCount}</strong><span>Products created</span></section><section><strong>{creatorOverview.metrics.subscribedCount}</strong><span>Enrolments</span><small>Course and product access</small></section><section><strong>{commerceTotal}</strong><span>Paid by learners</span><small>Gross successful payments</small></section><section><strong>{commercePayments}</strong><span>Learner payments</span><small>Successful transactions</small></section><section><strong>{creatorOverview.metrics.inProgressCount}</strong><span>In progress</span></section><section><strong>{creatorOverview.metrics.completedCount}</strong><span>Completed</span></section></div><section class="portfolio-overview"><div class="dashboard-section-heading"><div><span class="eyebrow">Portfolio</span><h3>Products by format</h3></div></div><div class="portfolio-overview-grid">{productPortfolio.map((group) => <a href={group.key === "course" ? "/dashboard?workspace=creation&section=content&type=course" : `/dashboard?workspace=creation&section=content&type=${group.types[0]}`}><span>{group.label}</span><strong>{group.products}</strong><small>{group.published} published · {group.learners} enrolled · {group.completed} completed</small></a>)}</div></section><section class="overview-product-status"><div class="dashboard-section-heading"><div><span class="eyebrow">Products</span><h3>Created products and status</h3></div><a class="text-link" href="/dashboard?workspace=creation&section=content">View all →</a></div>{creatorOverview.content.length ? <div class="overview-product-list">{creatorOverview.content.slice(0, 6).map((item) => <a href={`/dashboard?workspace=creation&section=product&productId=${item.id}`}><ProductIcon name={productCatalogueKey(item.content_type, item.delivery_mode)} size="small" /><div><strong>{item.title}</strong><small>{displayProductLabel(item)} · ID {item.id} · updated {new Date(item.updated_at).toLocaleDateString("en-SG")}</small></div><span class:list={["performance-status", item.display_status]}>{item.display_status}</span></a>)}</div> : <p class="form-message">Create your first learning product to see it here.</p>}</section></>}<div class="dashboard-overview-actions"><a href="/dashboard?workspace=creation&section=content"><strong>Manage products</strong><small>Open each product dashboard, edit drafts and manage versions</small></a><a href="/dashboard?workspace=creation&section=course-studio"><strong>Open course studio</strong><small>Manage modules, learners and scheduled classes inline</small></a><a href="/dashboard?workspace=creation&section=payments"><strong>Review payments</strong><small>See content sales, fees and payout history inline</small></a></div></article>}
+
+      {workspace === "creation" && section === "performance" && creatorOverview && <article class="panel dashboard-section-panel product-performance-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Product analytics</span><h2>Performance by product</h2><p>Compare learner access, engagement and completions across every format you create.</p></div><button class="button button-secondary button-small" type="button" data-export-performance>Export CSV</button></div><form class="performance-toolbar" method="get" action="/dashboard"><input type="hidden" name="workspace" value="creation" /><input type="hidden" name="section" value="performance" /><label>Period<select name="period"><option value="30" selected={requestedPeriod === "30"}>Last 30 days</option><option value="90" selected={requestedPeriod === "90"}>Last 90 days</option><option value="365" selected={requestedPeriod === "365"}>Last 12 months</option><option value="all" selected={requestedPeriod === "all"}>All time</option></select></label><label>Access<select name="scope"><option value="all" selected={requestedScope === "all"}>Owned and collaborating</option><option value="owned" selected={requestedScope === "owned"}>Owned by me</option><option value="collaborating" selected={requestedScope === "collaborating"}>Collaborating</option></select></label><label>Format<select name="type"><option value="all" selected={requestedType === "all"}>All products</option>{productTypes.map((type) => <option value={type} selected={requestedType === type}>{productLabels[type] ?? type.replaceAll("_", " ")}</option>)}</select></label><label>Status<select name="status"><option value="all" selected={requestedStatus === "all"}>All statuses</option><option value="published" selected={requestedStatus === "published"}>Published</option><option value="draft" selected={requestedStatus === "draft"}>Draft</option><option value="unpublished" selected={requestedStatus === "unpublished"}>Unpublished</option></select></label><label>Sort<select name="sort"><option value="learners" selected={requestedSort === "learners"}>Most learners</option><option value="completed" selected={requestedSort === "completed"}>Most completions</option><option value="completion" selected={requestedSort === "completion"}>Completion rate</option><option value="updated" selected={requestedSort === "updated"}>Recently updated</option></select></label><button class="button button-small" type="submit">Apply</button></form><p class="performance-context">Showing <strong>{visibleContent.length}</strong> products · {requestedPeriod === "all" ? "all-time learner activity" : `activity from the last ${requestedPeriod} days`}.</p>{performanceByType.length ? <div class="data-table-wrap"><table class="data-table product-breakdown-table" data-performance-table><thead><tr><th>Product type</th><th>Products</th><th>Published</th><th>Learners</th><th>Active</th><th>Completed</th><th>Completion</th><th>Assessment results</th></tr></thead><tbody>{performanceByType.map((group) => { const groupCompletion = group.learnerCount ? Math.round(group.completedCount / group.learnerCount * 100) : 0; const passRate = group.attemptCount ? Math.round(group.passedCount / group.attemptCount * 100) : 0; const averageScore = group.attemptCount ? Math.round(group.scoreTotal / group.attemptCount) : null; return <tr><td><strong>{productLabels[group.contentType] ?? group.contentType.replaceAll("_", " ")}</strong></td><td>{group.productCount}</td><td>{group.publishedCount}</td><td>{group.learnerCount}</td><td>{group.activeCount}</td><td>{group.completedCount}</td><td><strong>{groupCompletion}%</strong><progress value={groupCompletion} max="100"></progress></td><td>{group.attemptCount ? <><strong>{averageScore}% average</strong><small>{group.attemptCount} attempts · {passRate}% passed</small></> : <span class="muted-value">Not applicable</span>}</td></tr>; })}</tbody></table></div> : <p class="form-message">No products match these filters.</p>}</article>}
+
+      {workspace === "creation" && section === "content" && creatorOverview && <article class="panel dashboard-section-panel content-manager-panel">
+        <div class="dashboard-section-heading"><div><span class="eyebrow">Creator hub</span><h2>{requestedStatus === "all" ? "My content" : `${requestedStatus[0].toUpperCase()}${requestedStatus.slice(1)} content`}</h2><p>Drafts can be edited here. Published content uses versioned editing to protect enrolled learners.</p></div><details class="create-product-menu"><summary class="button button-small">+ Create content <span aria-hidden="true">⌄</span></summary><div class="create-product-popover">{creationOptions.map((option) => <a href={option.href}><ProductIcon name={option.key} size="small" /><span><strong>{option.label}</strong><small>{option.shortDescription}</small></span></a>)}</div></details></div>
+        <form class="content-manager-toolbar" method="get" action="/dashboard"><input type="hidden" name="workspace" value="creation" /><input type="hidden" name="section" value="content" /><label><span>Search products</span><input type="search" name="q" value={requestedQuery} placeholder="Title, topic, audience or product ID" /></label><label><span>Format</span><select name="type"><option value="all">All formats</option>{Object.entries(productLabels).map(([value, label]) => <option value={value} selected={requestedType === value}>{label}</option>)}</select></label><label><span>Status</span><select name="status"><option value="all">All statuses</option><option value="draft" selected={requestedStatus === "draft"}>Draft</option><option value="published" selected={requestedStatus === "published"}>Published</option><option value="unpublished" selected={requestedStatus === "unpublished"}>Unpublished</option><option value="archived" selected={requestedStatus === "archived"}>Archived</option></select></label><button class="button button-small" type="submit">Find products</button></form>
+        {visibleContent.length ? <div class="product-status-groups">{contentStatusGroups.filter((group) => requestedStatus === "all" || group.key === requestedStatus).map((group) => <section class:list={["product-status-group", group.key === "archived" && "archived"]}><header><div><span class:list={["status-group-mark", group.key]}></span><div><h3>{group.label}</h3><p>{group.description}</p></div></div><strong>{group.items.length}</strong></header>{group.items.length ? <div class="content-manager-list">{group.items.map((item) => {
+          const rate = completionRate(item);
+          const isCourse = item.content_type === "course";
+          const isAssessment = ["quiz", "test", "mock_exam"].includes(item.content_type);
+          const fullEditor = isCourse ? `/dashboard?workspace=creation&section=course-studio&courseId=${item.id}${item.display_status === "draft" ? "&edit=details" : ""}` : `/create?edit=${item.id}#create-product`;
+          return <article class="content-manager-item">
+            <header><ProductIcon name={productCatalogueKey(item.content_type, item.delivery_mode)} /><div class="content-manager-title"><span class:list={["performance-status", item.display_status]}>{item.display_status}</span><a class="content-title-link" href={`/dashboard?workspace=creation&section=product&productId=${item.id}`}><strong>{item.title}</strong></a><small>{displayProductLabel(item)} · version {item.content_version ?? 1} · {item.ownership_scope === "owned" ? "Owned by me" : `Collaborating as ${item.member_role.replace("instructor", "co-host")}`}</small><code class="product-id">ID {item.id}</code></div><div class="content-manager-stats"><span><strong>{item.subscribed_count}</strong> enrolled</span><span><strong>{item.completed_count}</strong> completed</span><span><strong>{rate}%</strong> completion</span></div><div class="content-manager-actions"><a class="button button-small button-secondary" href={`/dashboard?workspace=creation&section=product&productId=${item.id}`}>Dashboard</a>{item.display_status === "draft" && Boolean(item.can_edit) ? <details class="inline-draft-editor"><summary class="text-link">Quick edit</summary><div class="inline-editor-popover"><form class="dashboard-draft-form" data-kind={isCourse ? "course" : "product"} action={isCourse ? `/api/tutor/courses/${item.id}` : `/api/creator/learning-products/${item.id}`}><input type="hidden" name="productType" value={item.content_type} /><div class="inline-editor-grid"><label>Title<input name="title" required minlength="3" maxlength="160" value={item.title} /></label><label>Topic<input name="subject" required maxlength="120" value={item.subject ?? ""} /></label><label>Audience<input name={isCourse ? "primaryLevel" : "audience"} required maxlength="120" value={item.audience ?? ""} /></label>{isCourse ? <label>Delivery<select name="deliveryMode" required><option value="self-paced" selected={item.delivery_mode === "self-paced"}>Self-paced</option><option value="live" selected={item.delivery_mode === "live"}>Live</option><option value="hybrid" selected={item.delivery_mode === "hybrid"}>Hybrid</option><option value="ai-supported" selected={item.delivery_mode === "ai-supported"}>AI-supported</option></select></label> : <label>Estimated minutes<input name="estimatedMinutes" type="number" min="1" max="10000" required value={item.estimated_minutes ?? 20} /></label>}</div><label>Description<textarea name="description" required minlength="20" maxlength="5000" rows="3">{item.description ?? ""}</textarea></label>{!isCourse && !isAssessment && <label>Content link<input name="contentUrl" type="url" required value={item.content_url ?? ""} /></label>}<div class="inline-editor-actions"><button class="button button-small" type="submit">Save draft</button><a class="text-link" href={fullEditor}>Open full editor</a><p class="form-message" aria-live="polite"></p></div></form></div></details> : <a class="text-link" href={fullEditor}>Manage</a>}</div></header>
+          </article>;
+        })}</div> : <p class="status-group-empty">No {group.label.toLowerCase()} match these filters.</p>}</section>)}</div> : <div class="dashboard-empty"><h3>No {requestedStatus === "all" ? "" : requestedStatus} content found</h3><p>Try a different search or create a new learning product.</p><a class="button button-small" href="/dashboard?workspace=creation&section=getting-started">Get started</a></div>}
+      </article>}
+
+      {workspace === "creation" && section === "product" && !selectedProduct && <article class="panel dashboard-section-panel dashboard-empty"><h2>Product unavailable</h2><p>This product does not exist or you do not have permission to view it.</p><a class="button button-small" href="/dashboard?workspace=creation&section=content">Return to all products</a></article>}
+
+      {workspace === "creation" && section === "product" && selectedProduct && <div class="product-dashboard-stack">
+        <article class="panel product-command-header">
+          <div class="product-command-title"><a class="back-link" href="/dashboard?workspace=creation&section=content">← All products</a><div><ProductIcon name={productCatalogueKey(selectedProduct.content_type, selectedProduct.delivery_mode)} /><span class:list={["performance-status", selectedProduct.display_status]}>{selectedProduct.display_status}</span><span class="product-format-label">{displayProductLabel(selectedProduct)}</span></div><h2>{selectedProduct.title}</h2><p>{selectedProduct.description}</p><code class="product-id product-id-prominent">Product ID {selectedProduct.id}</code><small>Version {selectedProduct.content_version ?? 1} · updated {new Date(selectedProduct.updated_at).toLocaleString("en-SG")} · {selectedProduct.ownership_scope === "owned" ? "Owned by me" : `Collaborating as ${selectedProduct.member_role.replace("instructor", "co-host")}`}</small></div>
+          <div class="product-command-actions"><a class="button button-small" href={selectedEditorUrl}>{selectedProduct.display_status === "draft" ? "Edit product" : selectedProduct.content_type === "course" ? "Manage course" : "Open editor"}</a>{selectedPublicUrl && selectedProduct.display_status === "published" && <a class="button button-small button-secondary" href={selectedPublicUrl} target="_blank">View public page</a>}</div>
         </article>
-    )}
 
-    {data.user.account_type === "individual" && (
-      <article class="panel panel-wide">
-        <span class="eyebrow">Course access</span><h2>Active learning</h2>
-        {data.enrolments?.length ? <div class="dashboard-courses">{data.enrolments.map((enrolment) => {
-          const learnerQuery = enrolment.student_user_id === data.user.id
-            ? "" : `?studentId=${encodeURIComponent(enrolment.student_user_id)}`;
-          return <a href={`/learn/${enrolment.course_id}${learnerQuery}`}><span>{enrolment.subject} · {enrolment.offering_title}</span><strong>{enrolment.title}</strong><small>{Math.round(enrolment.progress_percent)}% complete · {enrolment.status}</small></a>;
-        })}</div> : <p>No active enrolments yet. <a class="text-link" href="/courses">Explore courses</a></p>}
-      </article>
-    )}
+        <nav class="panel product-dashboard-tabs" aria-label="Product dashboard sections">{productTabs.map((tab) => <a class:list={{ active: productTab === tab }} aria-current={productTab === tab ? "page" : undefined} href={productDashboardUrl(tab)}>{tab === "offers" ? "Offers & bundles" : tab[0].toUpperCase() + tab.slice(1)}</a>)}</nav>
 
-    <article class="panel panel-wide">
-        <span class="eyebrow">Creator studio</span><h2>Create and manage courses</h2>
-        {data.creatorCourses?.length ? <div class="dashboard-courses">{data.creatorCourses.map((course) => (
-          <a href={`/tutor?courseId=${course.id}`}><span>{course.status} · {course.pricing_status}</span><strong>{course.title}</strong><small>{course.enrolment_count} learners</small></a>
-        ))}</div> : <p>Share a skill, run a seminar, teach a class, or publish a self-paced course.</p>}
-        <a class="button" href="/tutor">Open creator studio</a>
-      </article>
+        {productTab === "overview" && <>
+          <ol class="panel creator-journey-strip" aria-label="Product readiness">{selectedJourneyLabels.map((label, index) => <li class:list={{ complete: selectedJourneyComplete[index], current: index === selectedJourneyCurrent }}><span>{selectedJourneyComplete[index] ? "✓" : index + 1}</span><strong>{label}</strong></li>)}</ol>
+          <div class="product-dashboard-metrics"><section><span>Enrolled</span><strong>{selectedProduct.subscribed_count}</strong><small>Learners with access</small></section><section><span>In progress</span><strong>{selectedProduct.in_progress_count}</strong><small>Currently learning</small></section><section><span>Completed</span><strong>{selectedProduct.completed_count}</strong><small>{selectedCompletionRate}% completion rate</small></section><section><span>{isAssessmentDashboard ? "Attempts" : "Engagement"}</span><strong>{isAssessmentDashboard ? selectedProduct.attempt_count : selectedCompletionRate + "%"}</strong><small>{isAssessmentDashboard ? `${selectedPassRate}% passed` : "Completion"}</small></section></div>
+          <div class="product-dashboard-columns">
+            <article class="panel product-overview-card"><span class="eyebrow">Product overview</span><h3>{selectedProduct.subject}</h3><p>{selectedProduct.description}</p><dl><div><dt>Audience</dt><dd>{selectedProduct.audience}</dd></div><div><dt>Estimated time</dt><dd>{selectedProduct.estimated_minutes ? `${selectedProduct.estimated_minutes} minutes` : selectedProduct.delivery_mode ?? "Varies"}</dd></div><div><dt>Version</dt><dd>{selectedProduct.content_version ?? 1}</dd></div><div><dt>Access</dt><dd>{selectedProduct.ownership_scope === "owned" ? "Owner" : selectedProduct.member_role}</dd></div>{isAssessmentDashboard && <><div><dt>Questions</dt><dd>{selectedProductDetail?.question_count ?? "—"}</dd></div><div><dt>Pass mark</dt><dd>{selectedProductDetail?.passing_score ?? 50}%</dd></div></>}</dl></article>
+            <article class="panel product-readiness-card"><span class="eyebrow">Next best action</span><h3>{selectedProduct.display_status === "draft" ? "Complete and publish this draft" : selectedProduct.display_status === "unpublished" ? "Review before republishing" : selectedProduct.content_type !== "course" && !selectedProductDetail?.offer_title ? "Add this product to a priced offer" : "Monitor learner progress"}</h3><p>{selectedProduct.display_status === "draft" ? "Review the content, learner experience and pricing before it becomes available." : selectedProduct.display_status === "unpublished" ? "Existing learners keep access while new enrolments remain closed." : selectedProduct.content_type !== "course" && !selectedProductDetail?.offer_title ? "Published products stay unavailable to other users until included in a priced, published offer." : "Use the learners and performance sections to understand engagement and completion."}</p><a class="button button-small button-secondary" href={selectedProduct.display_status === "draft" ? selectedEditorUrl : productDashboardUrl(selectedProduct.content_type === "course" ? "offers" : "performance")}>{selectedProduct.display_status === "draft" ? "Continue editing" : selectedProduct.content_type !== "course" && !selectedProductDetail?.offer_title ? "Review offers" : "View performance"}</a></article>
+          </div>
+          <article class="panel product-snapshot"><div class="dashboard-section-heading"><div><span class="eyebrow">Recent activity</span><h3>Latest changes to this product</h3></div><a class="text-link" href={productDashboardUrl("activity")}>Full audit trail →</a></div>{selectedProductActivity.length ? <div class="audit-list compact-audit-list">{selectedProductActivity.slice(0, 4).map((entry) => <section><span class="audit-mark" aria-hidden="true">•</span><div><strong>{entry.action.replaceAll(".", " ").replaceAll("_", " ")}</strong><small>{entry.actor_name}</small></div><time datetime={entry.created_at}>{new Date(entry.created_at).toLocaleString("en-SG")}</time></section>)}</div> : <p class="form-message">No product-specific activity has been recorded yet.</p>}</article>
+        </>}
+
+        {productTab === "content" && <article class="panel dashboard-section-panel product-tab-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Content</span><h2>Build and maintain the learning experience</h2><p>{selectedProduct.display_status === "draft" ? "This draft can be edited directly." : "Published content is protected. Create a new draft version before changing learner-facing content."}</p></div><a class="button button-small" href={selectedEditorUrl}>{selectedProduct.content_type === "course" ? "Open Course Studio" : "Open product editor"}</a></div><div class="product-content-summary"><section><span>Format</span><strong>{productLabels[selectedProduct.content_type] ?? selectedProduct.content_type}</strong></section><section><span>Topic</span><strong>{selectedProduct.subject}</strong></section><section><span>Audience</span><strong>{selectedProduct.audience}</strong></section><section><span>Estimated time</span><strong>{selectedProduct.estimated_minutes ? `${selectedProduct.estimated_minutes} min` : "Flexible"}</strong></section>{isAssessmentDashboard && <section><span>Questions</span><strong>{selectedProductDetail?.question_count ?? 0}</strong></section>}</div>{selectedProduct.content_url && <div class="product-content-link"><div><strong>Linked learning content</strong><small>{selectedProduct.content_url}</small></div><a class="text-link" href={selectedProduct.content_url} target="_blank" rel="noreferrer">Open source →</a></div>}</article>}
+
+        {productTab === "learners" && <article class="panel dashboard-section-panel product-tab-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Learners</span><h2>Access and progress</h2><p>Understand how many learners received access and how far they have progressed.</p></div><a class="button button-small button-secondary" href="/network?section=learners">Invite learners</a></div><div class="learner-funnel"><section><strong>{selectedProduct.subscribed_count}</strong><span>Enrolled</span></section><i aria-hidden="true">→</i><section><strong>{selectedProduct.in_progress_count}</strong><span>In progress</span></section><i aria-hidden="true">→</i><section><strong>{selectedProduct.completed_count}</strong><span>Completed</span></section></div><div class="product-insight-callout"><strong>{selectedCompletionRate}% completion rate</strong><p>{Number(selectedProduct.subscribed_count) ? `${Number(selectedProduct.subscribed_count) - Number(selectedProduct.completed_count)} learners have not completed this product yet.` : "Learner details will appear after the product is included in a priced offer and enrolled."}</p></div></article>}
+
+        {productTab === "performance" && <article class="panel dashboard-section-panel product-tab-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Performance</span><h2>{isAssessmentDashboard ? "Assessment outcomes" : "Learner engagement"}</h2><p>Metrics reflect the selected {requestedPeriod === "all" ? "all-time" : `${requestedPeriod}-day`} reporting period.</p></div><form method="get" action="/dashboard"><input type="hidden" name="workspace" value="creation" /><input type="hidden" name="section" value="product" /><input type="hidden" name="productId" value={selectedProductId} /><input type="hidden" name="tab" value="performance" /><select name="period" onchange="this.form.submit()"><option value="30" selected={requestedPeriod === "30"}>30 days</option><option value="90" selected={requestedPeriod === "90"}>90 days</option><option value="365" selected={requestedPeriod === "365"}>12 months</option><option value="all" selected={requestedPeriod === "all"}>All time</option></select></form></div><div class="performance-detail-grid"><section><span>Completion</span><strong>{selectedCompletionRate}%</strong><progress value={selectedCompletionRate} max="100"></progress><small>{selectedProduct.completed_count} of {selectedProduct.subscribed_count} enrolled</small></section>{isAssessmentDashboard ? <><section><span>Average score</span><strong>{selectedProduct.average_score === null ? "—" : `${Math.round(Number(selectedProduct.average_score))}%`}</strong><small>{selectedProduct.attempt_count} submitted attempts</small></section><section><span>Pass rate</span><strong>{selectedPassRate}%</strong><progress value={selectedPassRate} max="100"></progress><small>{selectedProduct.passed_count} passed</small></section></> : <section><span>Active learners</span><strong>{selectedProduct.in_progress_count}</strong><small>Started but not completed</small></section>}</div>{!isAssessmentDashboard && <p class="analytics-note">Deeper page, watch-time and listening analytics will populate as engagement-event tracking is enabled for this format.</p>}</article>}
+
+        {productTab === "offers" && <article class="panel dashboard-section-panel product-tab-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Offers & bundles</span><h2>Where learners can buy this product</h2><p>A product is available to other users only after pricing is set and its offer is published.</p></div><a class="button button-small" href={selectedProduct.content_type === "course" ? selectedEditorUrl : "/dashboard?workspace=creation&section=course-studio"}>{selectedProduct.content_type === "course" ? "Manage course offers" : "Bundle in Course Studio"}</a></div>{selectedProduct.content_type === "course" ? <div class="product-insight-callout"><strong>Course pricing and delivery</strong><p>Use Course Studio to manage self-paced, live online, in-person and hybrid offers, included products, planned meeting usage and learner pricing.</p></div> : selectedProductDetail?.offer_title ? <div class="offer-readiness-card ready"><span>Available in a published offer</span><h3>{selectedProductDetail.offer_title}</h3><strong>{money(selectedProductDetail.offer_price_cents, selectedProductDetail.currency)}</strong>{selectedProductDetail.offer_course_slug && <a class="text-link" href={`/courses/${selectedProductDetail.offer_course_slug}`}>View course offer →</a>}</div> : <div class="offer-readiness-card"><span>Not available for enrolment</span><h3>No priced, published offer includes this product</h3><p>Attach it to a course offering, set a learner price that covers platform costs, and publish the offering.</p><a class="button button-small button-secondary" href="/dashboard?workspace=creation&section=course-studio">Open Course Studio</a></div>}</article>}
+
+        {productTab === "versions" && <article class="panel dashboard-section-panel product-tab-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Versions</span><h2>Protect published learner content</h2><p>Published versions remain stable for enrolled learners. Copy a published version to make changes safely.</p></div></div><div class="version-history-card"><div><span>Current version</span><strong>Version {selectedProduct.content_version ?? 1}</strong><small>{selectedProduct.display_status} · updated {new Date(selectedProduct.updated_at).toLocaleString("en-SG")}</small></div>{selectedProduct.content_type !== "course" && selectedProduct.display_status !== "draft" && <form class="product-dashboard-action" action={`/api/creator/learning-products/${selectedProduct.id}/copy`} data-success="version"><button class="button button-small" type="submit">Create new draft version</button><p class="form-message"></p></form>}{selectedProduct.content_type === "course" && <a class="button button-small" href={selectedEditorUrl}>Manage course versions</a>}</div></article>}
+
+        {productTab === "activity" && <article class="panel dashboard-section-panel product-tab-panel"><span class="eyebrow">Product audit trail</span><h2>Detailed activity</h2>{selectedProductActivity.length ? <div class="audit-list">{selectedProductActivity.map((entry) => <section><span class="audit-mark" aria-hidden="true">•</span><div><strong>{entry.action.replaceAll(".", " ").replaceAll("_", " ")}</strong><small>{entry.entity_type.replaceAll("_", " ")} · {entry.actor_name}</small></div><time datetime={entry.created_at}>{new Date(entry.created_at).toLocaleString("en-SG")}</time></section>)}</div> : <p class="form-message">No product-specific activity has been recorded yet.</p>}</article>}
+
+        {productTab === "settings" && <article class="panel dashboard-section-panel product-tab-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Lifecycle settings</span><h2>Publication and access</h2><p>Changes preserve existing learner records, attempts and audit history.</p></div></div>{selectedProduct.content_type === "course" ? <div class="settings-action-row"><div><strong>Course lifecycle</strong><p>Manage publication, enrolment, pricing and visibility from Course Studio.</p></div><a class="button button-small" href={selectedEditorUrl}>Open Course Studio</a></div> : <div class="product-settings-list">{selectedProduct.display_status === "draft" && <><div class="settings-action-row"><div><strong>Publish product</strong><p>Publishing records this version. It still needs a priced, published offer before other users can access it.</p></div><form class="product-dashboard-action" action={`/api/creator/learning-products/${selectedProduct.id}/publish`}><button class="button button-small" type="submit">Publish</button><p class="form-message"></p></form></div><div class="settings-action-row danger"><div><strong>Delete draft</strong><p>Permanently removes this unused draft. Products attached to offers or learners cannot be deleted.</p></div><form class="product-dashboard-action" action={`/api/creator/learning-products/${selectedProduct.id}`} data-method="DELETE" data-confirm="Delete this product draft permanently?"><button class="button button-small button-danger" type="submit">Delete draft</button><p class="form-message"></p></form></div></>}{selectedProduct.display_status === "published" && <div class="settings-action-row"><div><strong>Unpublish product</strong><p>Stops new access while preserving access and results for existing learners.</p></div><form class="product-dashboard-action" action={`/api/creator/learning-products/${selectedProduct.id}/unpublish`}><button class="button button-small button-danger" type="submit">Unpublish</button><p class="form-message"></p></form></div>}{selectedProduct.display_status === "unpublished" && <div class="settings-action-row"><div><strong>Republish product</strong><p>Restores visibility when a valid priced offer includes this product.</p></div><form class="product-dashboard-action" action={`/api/creator/learning-products/${selectedProduct.id}/republish`}><button class="button button-small" type="submit">Republish</button><p class="form-message"></p></form></div>}</div>}</article>}
+      </div>}
+
+      {workspace === "creation" && section === "course-studio" && <article class="panel dashboard-section-panel inline-course-studio">
+        <div class="dashboard-section-heading"><div><span class="eyebrow">Course studio</span><h2>Build and deliver your course</h2><p>Choose a course, update its draft details and schedule online classes without leaving your Creation Workspace.</p></div><a class="button button-small button-secondary" href="/tutor">Open advanced studio</a></div>
+        <div class="inline-studio-toolbar"><nav aria-label="Choose a course">{data.creatorCourses?.map((course) => <a class:list={{ active: course.id === selectedCourseId }} href={`/dashboard?workspace=creation&section=course-studio&courseId=${course.id}`}><strong>{course.title}</strong><small>{course.status} · {course.pricing_status}</small></a>)}</nav><details open={!data.creatorCourses?.length}><summary class="button button-small">+ Create course</summary><form class="inline-studio-form dashboard-api-form" data-kind="course" action="/api/tutor/courses"><div class="inline-editor-grid"><label>Course title<input name="title" required minlength="3" /></label><label>Topic<input name="subject" required /></label><label>Audience<input name="primaryLevel" required /></label><label>Primary delivery<select name="deliveryMode"><option value="self-paced">Recorded / self-paced</option><option value="live">Live online</option><option value="hybrid">Hybrid</option><option value="ai-supported">AI-supported</option></select></label><label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing">Knowledge sharing</option></select></label></div><label>Description<textarea name="description" required minlength="20" rows="4"></textarea></label><p class="meet-assurance"><strong>Draft first:</strong> Add course content before creating its priced offer. Online classes receive Google Meet links when scheduled using the course owner’s connected Google Calendar. <a href="/profile">Check connection settings</a>.</p><button class="button button-small" type="submit">Save draft and continue</button><p class="form-message" aria-live="polite"></p></form></details></div>
+        {inlineStudioError && <p class="form-error">{inlineStudioError}</p>}
+        {!selectedCourseId && <div class="dashboard-empty"><h3>No course selected</h3><p>Create a course draft to begin.</p></div>}
+        {inlineStudio && <div class="inline-studio-content"><section class="inline-studio-heading"><div><span class:list={["performance-status", inlineStudio.course.status === "published" && inlineStudio.course.listing_status !== "listed" ? "unpublished" : inlineStudio.course.status]}>{inlineStudio.course.status === "published" && inlineStudio.course.listing_status !== "listed" ? "unpublished" : inlineStudio.course.status}</span><h3>{inlineStudio.course.title}</h3><p>{inlineStudio.course.description}</p></div><div class="inline-studio-facts"><span><strong>{inlineStudio.modules.length}</strong> modules</span><span><strong>{inlineStudio.lessons.length}</strong> lessons</span><span><strong>{inlineStudio.offerings.length}</strong> offers</span><span><strong>{inlineStudio.sessions.length}</strong> sessions</span></div></section>
+          <details class="studio-editor" open={Astro.url.searchParams.get("edit") === "details" || inlineStudio.course.status === "draft"}><summary>Edit course details</summary><form class="inline-studio-form dashboard-api-form" data-method="PATCH" action={`/api/tutor/courses/${inlineStudio.course.id}`}><div class="inline-editor-grid"><label>Title<input name="title" required minlength="3" value={inlineStudio.course.title} /></label><label>Topic<input name="subject" required value={inlineStudio.course.subject} /></label><label>Audience<input name="primaryLevel" required value={inlineStudio.course.primary_level} /></label><label>Primary delivery<select name="deliveryMode"><option value="self-paced" selected={inlineStudio.course.delivery_mode === "self-paced"}>Recorded / self-paced</option><option value="live" selected={inlineStudio.course.delivery_mode === "live"}>Live online</option><option value="hybrid" selected={inlineStudio.course.delivery_mode === "hybrid"}>Hybrid</option><option value="ai-supported" selected={inlineStudio.course.delivery_mode === "ai-supported"}>AI-supported</option></select></label></div><label>Description<textarea name="description" required minlength="20" rows="4">{inlineStudio.course.description}</textarea></label><button class="button button-small" type="submit">Save course changes</button><p class="form-message" aria-live="polite"></p></form></details>
+          <section class="inline-session-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Online and in-person classes</span><h3>Scheduled sessions</h3><p>Every online session gets its own restricted Google Meet link and calendar invitations for the assigned host and enrolled learners.</p></div>{inlineStudio.offerings.length > 1 && <form method="get" action="/dashboard"><input type="hidden" name="workspace" value="creation" /><input type="hidden" name="section" value="course-studio" /><input type="hidden" name="courseId" value={inlineStudio.course.id} /><select name="offeringId" onchange="this.form.submit()">{inlineStudio.offerings.map((offering) => <option value={offering.id} selected={offering.id === selectedStudioOfferingId}>{offering.title}</option>)}</select></form>}</div>
+            {!selectedStudioOffering && <p class="form-message">Create and price an offering in the advanced studio before scheduling a class.</p>}
+            {selectedStudioOffering && <><form class="inline-studio-form dashboard-api-form session-scheduler" data-kind="session" action={`/api/tutor/offerings/${selectedStudioOffering.id}/sessions`}><div class="inline-editor-grid"><label>Session title<input name="title" required /></label><label>Delivery<select name="deliveryMode"><option value="live_online">Live online · Google Meet</option><option value="in_person">In person</option></select></label><label>Starts<input name="startsAt" type="datetime-local" required /></label><label>Ends<input name="endsAt" type="datetime-local" required /></label><label>Assigned host<select name="instructorId"><option value={data.user.id}>Me</option>{studioTeam.filter((member) => member.user_id !== data.user.id && member.status === "active" && ["owner", "administrator", "instructor", "facilitator"].includes(member.member_role)).map((member) => <option value={member.user_id}>{member.display_name} · {member.member_role.replace("instructor", "co-host")}</option>)}</select></label><label>Capacity<input name="capacity" type="number" min="1" /></label><label>Venue name<input name="venueName" /></label><label>Venue address<input name="venueAddress" /></label></div><label>Arrival instructions<textarea name="arrivalInstructions" rows="2"></textarea></label><p class="meet-assurance">Live online sessions automatically create the Google Meet link. Planned session time must fit the meeting allowance included in the published offer price.</p><button class="button button-small" type="submit">Schedule session</button><p class="form-message" aria-live="polite"></p></form><div class="inline-session-list">{inlineStudio.sessions.filter((session) => session.course_offering_id === selectedStudioOffering.id).map((session) => <article><div><strong>{session.title}</strong><small>{new Date(session.starts_at).toLocaleString("en-SG")} – {new Date(session.ends_at).toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit" })}{session.instructor_name ? ` · ${session.instructor_name}` : ""}</small></div><span>{session.delivery_mode === "live_online" ? "Online" : "In person"}</span>{session.meeting_url && <a class="text-link" href={session.meeting_url} target="_blank" rel="noreferrer">Open Google Meet</a>}</article>)}</div></>}
+          </section>
+        </div>}
+      </article>}
+
+      {workspace === "creation" && section === "payments" && <article class="panel dashboard-section-panel creator-payments-inline"><div class="dashboard-section-heading"><div><span class="eyebrow">Content sales</span><h2>Payments received from learners</h2><p>Review gross sales, deductions, net earnings and the release status for every creator-owned sale.</p></div></div>{creatorPayments.creatorSummary.length ? <div class="settlement-summary">{creatorPayments.creatorSummary.map((summary) => <><section><small>Paid by learners · {summary.currency}</small><strong>{money(summary.gross_cents, summary.currency)}</strong></section><section><small>Number of payments</small><strong>{creatorPayments.creatorSales.filter((sale) => sale.currency === summary.currency && sale.status === "paid").length}</strong></section><section><small>Pending release</small><strong>{money(summary.pending_cents, summary.currency)}</strong></section><section><small>Paid out</small><strong>{money(summary.transferred_cents, summary.currency)}</strong></section></>)}</div> : <p class="form-message">No learner payments have been received yet.</p>}{creatorPayments.creatorSales.length > 0 && <div class="data-table-wrap"><table class="data-table"><thead><tr><th>Received</th><th>Learner</th><th>Content sold</th><th>Gross paid</th><th>Fees and adjustments</th><th>Net earning</th><th>Status</th></tr></thead><tbody>{creatorPayments.creatorSales.map((payment) => <tr><td>{new Date(payment.created_at).toLocaleString("en-SG")}</td><td><strong>{payment.learner_name}</strong><small>{payment.learner_email}</small></td><td><strong>{payment.course_title}</strong><small>{payment.offering_title}</small></td><td>{money(payment.gross_cents ?? payment.amount_cents, payment.currency)}</td><td><small>Processing {money(payment.processing_fee_cents, payment.currency)}<br />Platform {money(payment.platform_fee_cents, payment.currency)}<br />Online class {money(payment.meeting_usage_fee_cents, payment.currency)}{Number(payment.refund_cents ?? 0) > 0 && <><br />Refund {money(payment.refund_cents, payment.currency)}</>}</small></td><td><strong>{money(payment.payable_cents ?? payment.amount_cents, payment.currency)}</strong></td><td><span class:list={["settlement-status", payment.settlement_status ?? "pending_course"]}>{settlementLabel(payment.settlement_status)}</span>{payment.transferred_at && <small>Paid {new Date(payment.transferred_at).toLocaleString("en-SG")}</small>}</td></tr>)}</tbody></table></div>}</article>}
+
+      {workspace === "creation" && section === "activity" && creatorOverview && <article class="panel dashboard-section-panel"><span class="eyebrow">Detailed audit trail</span><h2>Creation activity</h2><div class="audit-list">{creatorOverview.auditLogs.map((entry) => <section><span class="audit-mark" aria-hidden="true">•</span><div><strong>{entry.action.replaceAll(".", " ").replaceAll("_", " ")}</strong><small>{entry.entity_type.replaceAll("_", " ")} · {entry.actor_name}</small></div><time datetime={entry.created_at}>{new Date(entry.created_at).toLocaleString("en-SG")}</time></section>)}</div>{!creatorOverview.auditLogs.length && <p class="form-message">Creator activity will be recorded here.</p>}</article>}
+    </main>
   </section>
 </BaseLayout>
+
+<script>
+  document.querySelector<HTMLElement>("[data-export-performance]")?.addEventListener("click", () => {
+    const table = document.querySelector<HTMLTableElement>("[data-performance-table]");
+    if (!table) return;
+    const rows = [...table.querySelectorAll("tr")].map((row) =>
+      [...row.querySelectorAll("th,td")].map((cell) => `"${(cell.textContent ?? "").trim().replace(/\s+/g, " ").replaceAll('"', '""')}"`).join(",")
+    );
+    const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `pencilscope-content-performance-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  });
+
+  document.querySelectorAll<HTMLFormElement>(".dashboard-draft-form").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const message = form.querySelector<HTMLElement>(".form-message");
+      const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      const values = Object.fromEntries(new FormData(form).entries()) as Record<string, string>;
+      const payload: Record<string, unknown> = { ...values };
+      if (form.dataset.kind === "product") {
+        payload.estimatedMinutes = Number(values.estimatedMinutes);
+        payload.metadataOnly = true;
+      }
+      button?.setAttribute("disabled", "");
+      if (message) { message.textContent = "Saving…"; message.className = "form-message"; }
+      try {
+        const response = await fetch(form.action, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const result = await response.json() as { error?: { message?: string } };
+        if (!response.ok) throw new Error(result.error?.message ?? "Draft could not be saved.");
+        if (message) { message.textContent = "Draft saved."; message.className = "form-message form-success"; }
+        const title = form.closest<HTMLElement>(".content-manager-item")?.querySelector<HTMLElement>(".content-manager-title > strong");
+        if (title) title.textContent = values.title;
+      } catch (error) {
+        if (message) { message.textContent = error instanceof Error ? error.message : "Draft could not be saved."; message.className = "form-message form-error"; }
+      } finally {
+        button?.removeAttribute("disabled");
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLDetailsElement>(".inline-draft-editor").forEach((editor) => {
+    editor.addEventListener("toggle", () => {
+      if (!editor.open) return;
+      document.querySelectorAll<HTMLDetailsElement>(".inline-draft-editor[open]").forEach((other) => {
+        if (other !== editor) other.open = false;
+      });
+    });
+  });
+
+  document.querySelectorAll<HTMLFormElement>(".dashboard-api-form").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const message = form.querySelector<HTMLElement>(".form-message");
+      const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      const values = Object.fromEntries(new FormData(form).entries()) as Record<string, string>;
+      let body: Record<string, unknown> = { ...values };
+      if (form.dataset.kind === "course") {
+        body = {
+          ...values,
+          categorySlugs: values.categorySlug ? [values.categorySlug] : [],
+          priceCents: values.priceSGD ? Math.round(Number(values.priceSGD) * 100) : 50,
+          currency: "SGD",
+          publish: false
+        };
+        delete body.priceSGD;
+        delete body.categorySlug;
+      }
+      if (form.dataset.kind === "session") {
+        body = {
+          ...values,
+          capacity: values.capacity ? Number(values.capacity) : null,
+          startsAt: new Date(values.startsAt).toISOString(),
+          endsAt: new Date(values.endsAt).toISOString(),
+          timezone: "Asia/Singapore"
+        };
+      }
+      if (button) button.disabled = true;
+      if (message) { message.className = "form-message"; message.textContent = form.dataset.kind === "session" ? "Creating Google Meet and sending calendar invitations…" : "Saving…"; }
+      try {
+        const response = await fetch(form.action, {
+          method: form.dataset.method ?? "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        const result = await response.json() as { course?: { id?: string }; error?: { message?: string } };
+        if (!response.ok) throw new Error(result.error?.message ?? "Could not save.");
+        if (message) { message.className = "form-message form-success"; message.textContent = form.dataset.kind === "session" ? "Session and Google Meet created." : "Saved."; }
+        if ((form.dataset.method ?? "POST").toUpperCase() === "PATCH") {
+          if (button) button.disabled = false;
+          return;
+        }
+        const current = new URL(window.location.href);
+        const courseId = result.course?.id ?? current.searchParams.get("courseId");
+        window.location.href = `/dashboard?workspace=creation&section=course-studio${courseId ? `&courseId=${encodeURIComponent(courseId)}` : ""}${current.searchParams.get("offeringId") ? `&offeringId=${encodeURIComponent(current.searchParams.get("offeringId") ?? "")}` : ""}`;
+      } catch (error) {
+        if (message) { message.className = "form-message form-error"; message.textContent = error instanceof Error ? error.message : "Could not save."; }
+        if (button) button.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLFormElement>(".product-dashboard-action").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
+      const message = form.querySelector<HTMLElement>(".form-message");
+      const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      if (button) button.disabled = true;
+      if (message) { message.className = "form-message"; message.textContent = "Updating…"; }
+      try {
+        const response = await fetch(form.action, {
+          method: form.dataset.method ?? "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        });
+        const result = await response.json() as { product?: { id?: string }; error?: { message?: string } };
+        if (!response.ok) throw new Error(result.error?.message ?? "The product could not be updated.");
+        if (form.dataset.success === "version" && result.product?.id) {
+          window.location.href = `/dashboard?workspace=creation&section=product&productId=${encodeURIComponent(result.product.id)}`;
+          return;
+        }
+        if (form.dataset.method === "DELETE") {
+          window.location.href = "/dashboard?workspace=creation&section=content";
+          return;
+        }
+        window.location.reload();
+      } catch (error) {
+        if (message) { message.className = "form-message form-error"; message.textContent = error instanceof Error ? error.message : "The product could not be updated."; }
+        if (button) button.disabled = false;
+      }
+    });
+  });
+
+  document.querySelectorAll<HTMLFormElement>(".payment-issue-form").forEach((form) => {
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      const message = form.querySelector<HTMLElement>(".form-message");
+      const values = new FormData(form);
+      if (button) button.disabled = true;
+      if (message) { message.className = "form-message"; message.textContent = "Sending your issue for review…"; }
+      try {
+        const response = await fetch(`/api/payments/${encodeURIComponent(form.dataset.orderId ?? "")}/issues`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: values.get("reason"), caseType: values.get("caseType") })
+        });
+        const result = await response.json() as { error?: { message?: string } };
+        if (!response.ok) throw new Error(result.error?.message ?? "The issue could not be submitted.");
+        if (message) { message.className = "form-message form-success"; message.textContent = "Issue received. The creator payout is on hold while it is reviewed."; }
+        form.querySelectorAll<HTMLElement>("input, textarea, select")
+          .forEach((field) => field.setAttribute("disabled", ""));
+      } catch (error) {
+        if (message) { message.className = "form-message form-error"; message.textContent = error instanceof Error ? error.message : "The issue could not be submitted."; }
+        if (button) button.disabled = false;
+      }
+    });
+  });
+</script>

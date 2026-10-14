@@ -1,0 +1,91 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/notifications");
+
+type NotificationItem = {
+  id: string; title: string; body: string; category: string; priority: string;
+  action_url: string | null; action_label: string | null; delivered_at: string;
+  read_at: string | null; expires_at: string | null;
+};
+const response = await requestApi("/api/notifications?limit=100", { userId });
+const data = response.ok
+  ? await response.json<{ notifications: NotificationItem[]; unreadCount: number }>()
+  : { notifications: [], unreadCount: 0 };
+---
+
+<BaseLayout title="Notifications — PencilScope" description="Updates about your learning, creations, account and the PencilScope service.">
+  <section class="page-hero notification-page-hero"><div class="shell"><span class="eyebrow">Your updates</span><h1>Notifications</h1><p>Learning activity, creator updates and important PencilScope announcements in one place.</p></div></section>
+  <section class="section notification-page"><div class="shell">
+    <div class="notification-toolbar">
+      <div class="notification-filters"><button class="filter active" data-notification-filter="all">All</button><button class="filter" data-notification-filter="unread">Unread <span>{data.unreadCount}</span></button></div>
+      {data.unreadCount > 0 && <button class="text-link" data-read-all>Mark all as read</button>}
+    </div>
+    <div class="notification-list" data-notification-list>
+      {data.notifications.length ? data.notifications.map((notification) => (
+        <article class:list={["notification-item", `priority-${notification.priority}`, { unread: !notification.read_at }]} data-notification-id={notification.id} data-unread={notification.read_at ? "false" : "true"}>
+          <span class="notification-category">{notification.category}</span>
+          <div><h2>{notification.title}</h2><p>{notification.body}</p><small>{new Date(notification.delivered_at).toLocaleString("en-SG", { dateStyle: "medium", timeStyle: "short" })}</small></div>
+          <div class="notification-actions">
+            {notification.action_url && <a class="button button-small button-secondary" href={notification.action_url} data-notification-link={notification.id}>{notification.action_label || "View"}</a>}
+            {!notification.read_at && <button class="text-link" data-notification-action="read">Mark read</button>}
+            <button class="text-link" data-notification-action="dismiss">Dismiss</button>
+          </div>
+        </article>
+      )) : <div class="panel notification-empty"><span aria-hidden="true">♢</span><h2>You are all caught up.</h2><p>Important updates will appear here.</p></div>}
+    </div>
+    <p class="notification-filter-empty" hidden>No unread notifications.</p>
+  </div></section>
+</BaseLayout>
+
+<script>
+  const items = () => Array.from(document.querySelectorAll<HTMLElement>("[data-notification-id]"));
+  const empty = document.querySelector<HTMLElement>(".notification-filter-empty");
+  document.querySelectorAll<HTMLButtonElement>("[data-notification-filter]").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll("[data-notification-filter]").forEach((item) => item.classList.remove("active"));
+      button.classList.add("active");
+      const unreadOnly = button.dataset.notificationFilter === "unread";
+      let visible = 0;
+      items().forEach((item) => {
+        item.hidden = unreadOnly && item.dataset.unread !== "true";
+        if (!item.hidden) visible += 1;
+      });
+      if (empty) empty.hidden = visible > 0;
+    });
+  });
+
+  document.addEventListener("click", async (event) => {
+    const target = event.target as HTMLElement;
+    const actionButton = target.closest<HTMLButtonElement>("[data-notification-action]");
+    if (actionButton) {
+      const item = actionButton.closest<HTMLElement>("[data-notification-id]");
+      const id = item?.dataset.notificationId;
+      const action = actionButton.dataset.notificationAction;
+      if (!item || !id || !action) return;
+      actionButton.disabled = true;
+      const response = await fetch(`/api/notifications/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+      if (!response.ok) { actionButton.disabled = false; return; }
+      if (action === "dismiss") item.remove();
+      else { item.classList.remove("unread"); item.dataset.unread = "false"; actionButton.remove(); }
+    }
+    const readAll = target.closest<HTMLButtonElement>("[data-read-all]");
+    if (readAll) {
+      readAll.disabled = true;
+      const response = await fetch("/api/notifications/read-all", { method: "POST" });
+      if (response.ok) {
+        items().forEach((item) => { item.classList.remove("unread"); item.dataset.unread = "false"; item.querySelector('[data-notification-action="read"]')?.remove(); });
+        readAll.remove();
+      } else readAll.disabled = false;
+    }
+  });
+
+  document.querySelectorAll<HTMLAnchorElement>("[data-notification-link]").forEach((link) => {
+    link.addEventListener("click", () => {
+      const id = link.dataset.notificationLink;
+      if (id) fetch(`/api/notifications/${encodeURIComponent(id)}/click`, { method: "POST", keepalive: true });
+    });
+  });
+</script>

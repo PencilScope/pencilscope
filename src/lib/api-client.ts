@@ -1,8 +1,11 @@
 import { env as cloudflareEnv } from "cloudflare:workers";
-import { sampleCourses, type CourseSummary } from "@/lib/courses";
+import type { CourseSummary } from "@/lib/courses";
+import type { LearningProduct } from "@/lib/learning-products";
 
 type CourseListResponse = { courses: CourseSummary[] };
 type CourseResponse = { course: CourseSummary };
+type LearningProductListResponse = { products: LearningProduct[] };
+type LearningProductResponse = { product: LearningProduct };
 
 export type ApiRequestOptions = {
   userId?: string;
@@ -27,10 +30,10 @@ export async function listPublishedCourses(): Promise<CourseSummary[]> {
     const response = await requestApi("/api/courses");
     if (!response.ok) throw new Error(`Course API returned ${response.status}`);
     const result = await response.json<CourseListResponse>();
-    return result.courses.length ? result.courses : sampleCourses;
+    return result.courses;
   } catch (error) {
     console.warn("courses.api.unavailable", { error });
-    return sampleCourses;
+    return [];
   }
 }
 
@@ -43,6 +46,30 @@ export async function findCourseBySlug(slug: string): Promise<CourseSummary | un
     return result.course;
   } catch (error) {
     console.warn("course.api.unavailable", { slug, error });
-    return sampleCourses.find((course) => course.slug === slug);
+    return undefined;
+  }
+}
+
+export async function listPublishedLearningProducts(type?: string): Promise<LearningProduct[]> {
+  try {
+    const query = type ? `?type=${encodeURIComponent(type)}` : "";
+    const response = await requestApi(`/api/learning-products${query}`);
+    if (!response.ok) throw new Error(`Learning product API returned ${response.status}`);
+    return (await response.json<LearningProductListResponse>()).products;
+  } catch (error) {
+    console.warn("learning-products.api.unavailable", { error });
+    return [];
+  }
+}
+
+export async function findLearningProductBySlug(slug: string, userId?: string): Promise<LearningProduct | undefined> {
+  try {
+    const response = await requestApi(`/api/learning-products/${encodeURIComponent(slug)}`, { userId });
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error(`Learning product API returned ${response.status}`);
+    return (await response.json<LearningProductResponse>()).product;
+  } catch (error) {
+    console.warn("learning-product.api.unavailable", { slug, error });
+    return undefined;
   }
 }
