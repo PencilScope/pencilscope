@@ -2,8 +2,6 @@
 import "@/styles/global.css";
 import "@/styles/journeys.css";
 import { requestApi } from "@/lib/api-client";
-import ProductIcon from "@/components/ProductIcon.astro";
-import { creatorProductCatalogue } from "@/lib/product-catalog";
 type Props = {
   title?: string;
   description?: string;
@@ -68,7 +66,6 @@ const nameParts = headerUser.displayName.trim().split(/\s+/).filter(Boolean);
 const profileInitials = nameParts.length > 1
   ? `${nameParts[nameParts.length - 1][0]}${nameParts[0][0]}`.toUpperCase()
   : (nameParts[0]?.[0] ?? "U").toUpperCase();
-const createOptions = creatorProductCatalogue;
 ---
 
 <!doctype html>
@@ -107,10 +104,8 @@ const createOptions = creatorProductCatalogue;
           {signedIn ? (
             <>
               <a class:list={["workspace-nav-link", { active: learningContext }]} aria-current={learningContext ? "page" : undefined} href="/dashboard?workspace=learning">My Learning</a>
-              <a class:list={["workspace-nav-link", "creation-workspace-link", { active: creatorContext }]} aria-current={creatorContext && !createFlowActive ? "page" : undefined} href="/dashboard?workspace=creation">My Creations</a>
-              <a class:list={["workspace-nav-link", "network-workspace-link", { active: networkContext }]} aria-current={networkContext ? "page" : undefined} href="/network">Network{pendingConnectionCount > 0 && <b class="workspace-count">{pendingConnectionCount > 99 ? "99+" : pendingConnectionCount}</b>}</a>
-              <details class="create-nav-menu"><summary class:list={["creator-nav-link", { active: createFlowActive }]} aria-label="Create learning content" aria-current={createFlowActive ? "page" : undefined}>Create <span aria-hidden="true">⌄</span></summary><div class="create-nav-popover">{createOptions.map((option) => <a href={option.href}><ProductIcon name={option.key} size="small" /><span><strong>{option.label}</strong><small>{option.shortDescription}</small></span></a>)}</div></details>
-              <a class:list={["nav-icon", { "has-unread": unreadMessageCount > 0 }]} href="/network?section=messages" aria-label={`Messages${unreadMessageCount ? `, ${unreadMessageCount} unread` : ""}`} data-message-nav>
+              <a class:list={["workspace-nav-link", "creation-workspace-link", { active: creatorContext }]} aria-current={creatorContext && !createFlowActive ? "page" : undefined} href="/dashboard?workspace=creation">Creator Studio</a>
+              <a class:list={["nav-icon", { "has-unread": unreadMessageCount > 0 }]} href="/network?section=messages" aria-label={`Inbox${unreadMessageCount ? `, ${unreadMessageCount} unread` : ""}`} data-message-nav>
                 <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 5.75h14a2 2 0 0 1 2 2v8.5a2 2 0 0 1-2 2H9l-4.75 3v-3.2A2 2 0 0 1 3 16.25v-8.5a2 2 0 0 1 2-2Z"/><path d="M7.5 10h9M7.5 14h6"/></svg>
                 <b data-message-count hidden={unreadMessageCount === 0}>{unreadMessageCount > 99 ? "99+" : unreadMessageCount}</b>
               </a>
@@ -154,7 +149,7 @@ const createOptions = creatorProductCatalogue;
       <a href="/library"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h7v14H4zM13 5h7v14h-7z"/><path d="M7 9h1M16 9h1"/></svg><span>Explore</span></a>
       <a class:list={{ active: learningContext }} aria-current={learningContext ? "page" : undefined} href="/dashboard?workspace=learning"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.5 12 3l8 2.5v11L12 19l-8-2.5Z"/><path d="M12 3v16"/></svg><span>Learning</span></a>
       <a class:list={["mobile-create", { active: createFlowActive }]} aria-current={createFlowActive ? "page" : undefined} href="/create"><span aria-hidden="true">＋</span><small>Create</small></a>
-      <a class:list={{ active: creatorContext }} aria-current={creatorContext && !createFlowActive ? "page" : undefined} href="/dashboard?workspace=creation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Creations</span></a>
+      <a class:list={{ active: creatorContext }} aria-current={creatorContext && !createFlowActive ? "page" : undefined} href="/dashboard?workspace=creation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Studio</span></a>
       <a class:list={{ active: networkContext, "has-unread": unreadMessageCount > 0 }} aria-current={networkContext ? "page" : undefined} href="/network"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="7" r="2.5"/><path d="M3.5 19c.5-4 2-6 4.5-6s4 2 4.5 6M13 14c1-.9 2.2-1.4 3.7-1.4 2.2 0 3.5 1.5 3.8 4.4"/></svg><span>Network</span><b data-mobile-message-count hidden={unreadMessageCount === 0}>{unreadMessageCount > 99 ? "99+" : unreadMessageCount}</b></a>
     </nav>}
     <main><slot /></main>

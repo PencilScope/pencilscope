@@ -326,3 +326,14 @@
 @media(max-width:520px){.library-upload-actions{align-items:stretch;flex-direction:column}.library-upload-actions .button{width:100%}}
 .payout-setup-card{border-color:#bbd8cc;background:linear-gradient(135deg,#fff 55%,#ecfdf5)}.payout-setup-card h2{margin:5px 0 7px}.payout-setup-card>p{max-width:760px;color:var(--muted)}.payout-setup-card>small{display:block;margin-top:12px;color:#61776d;line-height:1.55}.payout-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:16px}.payout-setup-card .form-message{margin:10px 0 0}
 .ai-beginner-path{margin:0 0 22px;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;list-style:none}.ai-beginner-path li{padding:11px;border:1px solid #ddd6fe;border-radius:11px;background:#faf5ff}.ai-beginner-path strong,.ai-beginner-path span{display:block}.ai-beginner-path strong{color:#6d28d9;font-size:10px}.ai-beginner-path span{margin-top:4px;color:#5f5870;font-size:9px;line-height:1.45}@media(max-width:760px){.ai-beginner-path{grid-template-columns:1fr 1fr}}@media(max-width:460px){.ai-beginner-path{grid-template-columns:1fr}}
+
+/* Simplified creator navigation */
+.product-dashboard-tabs{align-items:center}
+.product-nav-more{position:relative;margin-left:auto}
+.product-nav-more>summary{min-height:38px;padding:10px 14px;display:flex;align-items:center;border-radius:8px;color:#4f647d;font-size:11px;font-weight:800;list-style:none;cursor:pointer}
+.product-nav-more>summary::-webkit-details-marker{display:none}
+.product-nav-more[open]>summary,.product-nav-more>summary:hover{color:#065f46;background:#ecfdf5}
+.product-nav-more>div{min-width:150px;padding:6px;position:absolute;right:0;top:calc(100% + 7px);z-index:30;display:grid;border:1px solid #cbdbea;border-radius:10px;background:#fff;box-shadow:0 16px 35px rgba(16,42,86,.16)}
+.product-nav-more>div a{padding:9px 11px;border-radius:7px}
+.product-nav-more>div a:hover,.product-nav-more>div a.active{color:#065f46;background:#ecfdf5}
+@media(max-width:620px){.product-dashboard-tabs{overflow:visible;flex-wrap:wrap}.product-nav-more{margin-left:0}.product-nav-more>div{left:0;right:auto}}

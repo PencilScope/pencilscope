@@ -173,7 +173,7 @@ const readiness = studio ? [
   { label: "Course description", complete: studio.course.description.trim().length >= 20 },
   { label: "Curriculum module", complete: studio.modules.length > 0 },
   { label: "Learning lesson", complete: studio.lessons.length > 0 },
-  { label: "Published offering and price", complete: publishedOfferingCount > 0 },
+  { label: "Price and enrolment ready", complete: publishedOfferingCount > 0 },
   { label: "No draft assessments", complete: draftAssessmentCount === 0 }
 ] : [];
 const readinessComplete = readiness.filter((item) => item.complete).length;
@@ -196,17 +196,17 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
       </nav>
       {studio && <nav class="studio-module-nav" aria-label="Course studio sections">
         <a class:list={{ active: activeSection === "overview" }} href={studioUrl("overview")}><span>Overview</span><small>{readinessComplete}/{readiness.length} ready</small></a>
-        <a class:list={{ active: activeSection === "offerings" }} href={studioUrl("offerings")}><span>Offerings</span><small>{studio.offerings.length}</small></a>
-        <a class:list={{ active: activeSection === "curriculum" }} href={studioUrl("curriculum")}><span>Curriculum</span><small>{studio.modules.length} modules · {studio.lessons.length} lessons</small></a>
+        <a class:list={{ active: activeSection === "offerings" }} href={studioUrl("offerings")}><span>Price & enrolment</span><small>{studio.offerings.length}</small></a>
+        <a class:list={{ active: activeSection === "curriculum" }} href={studioUrl("curriculum")}><span>Build content</span><small>{studio.modules.length} modules · {studio.lessons.length} lessons</small></a>
         <a class:list={{ active: activeSection === "assessments" }} href={studioUrl("assessments")}><span>Assessments</span><small>{studio.assessments.length}{draftAssessmentCount ? ` · ${draftAssessmentCount} draft` : ""}</small></a>
-        <a class:list={{ active: activeSection === "results" }} href={studioUrl("results")}><span>Results</span><small>{resultAttempts.length} attempts</small></a>
-        <a class:list={{ active: activeSection === "resources" }} href={studioUrl("resources")}><span>Resources & ebooks</span><small>{studio.materials.length + studio.flashcardDecks.length}</small></a>
-        <a class:list={{ active: activeSection === "sessions" }} href={studioUrl("sessions")}><span>Sessions</span><small>{studio.sessions.length}</small></a>
-        <a class:list={{ active: activeSection === "learners" }} href={studioUrl("learners")}><span>Learners & invites</span><small>{invitations.length}</small></a>
-        <a class:list={{ active: activeSection === "team" }} href={studioUrl("team")}><span>Team access</span><small>{team.filter((member) => member.status === "active").length}</small></a>
-        <a class:list={{ active: activeSection === "publish" }} href={studioUrl("publish")}><span>Publish</span><small>{studio.course.status}</small></a>
+        <a class:list={{ active: activeSection === "results" }} href={studioUrl("results")}><span>Insights</span><small>{resultAttempts.length} attempts</small></a>
+        <a class:list={{ active: activeSection === "resources" }} href={studioUrl("resources")}><span>Resources</span><small>{studio.materials.length + studio.flashcardDecks.length}</small></a>
+        <a class:list={{ active: activeSection === "sessions" }} href={studioUrl("sessions")}><span>Schedule</span><small>{studio.sessions.length}</small></a>
+        <a class:list={{ active: activeSection === "learners" }} href={studioUrl("learners")}><span>Learners</span><small>{invitations.length}</small></a>
+        <a class:list={{ active: activeSection === "team" }} href={studioUrl("team")}><span>Team</span><small>{team.filter((member) => member.status === "active").length}</small></a>
+        <a class:list={{ active: activeSection === "publish" }} href={studioUrl("publish")}><span>Review & publish</span><small>{studio.course.status}</small></a>
       </nav>}
-      <a class:list={["studio-new-course", { active: createMode }]} href="/tutor?mode=new"><span>＋</span><strong>Create a new course</strong><small>Open the course form</small></a>
+      <a class:list={["studio-new-course", { active: createMode }]} href="/tutor?mode=new"><span>＋</span><strong>Create course</strong><small>Open the course form</small></a>
     </aside>
 
     <main class="studio-main">
@@ -230,7 +230,7 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
             <div class="studio-metric-grid">
               <a href={studioUrl("curriculum")}><strong>{studio.modules.length}</strong><span>Modules</span><small>{studio.lessons.length} lessons</small></a>
               <a href={studioUrl("assessments")}><strong>{studio.assessments.length}</strong><span>Assessments</span><small>{draftAssessmentCount} drafts</small></a>
-              <a href={studioUrl("offerings")}><strong>{studio.offerings.length}</strong><span>Offerings</span><small>{publishedOfferingCount} bookable</small></a>
+              <a href={studioUrl("offerings")}><strong>{studio.offerings.length}</strong><span>Price & enrolment</span><small>{publishedOfferingCount} bookable</small></a>
               <a href={studioUrl("learners")}><strong>{dashboard.creatorCourses?.find((course) => course.id === studio.course.id)?.enrolment_count ?? 0}</strong><span>Learners</span><small>{invitations.length} invitations</small></a>
             </div>
             <div class="studio-overview-columns">
@@ -268,7 +268,7 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
 
           {activeSection === "offerings" && <article class="panel">
             <span class="eyebrow">Pricing, products and access</span><h2>Priced learning offers</h2>
-            <p class="studio-description">Create the offer and set its price, add the products learners will receive, then publish it. Nothing becomes visible or purchasable to other users until the priced offer is published.</p>
+            <p class="studio-description">Choose the learner price, access period and included content. Nothing becomes visible or purchasable until enrolment is opened.</p>
             <form class="inline-form api-form" data-kind="offering" action={`/api/tutor/courses/${studio.course.id}/offerings`} method="post">
               <input name="title" required placeholder="Offering title" />
               <select name="offeringType"><option value="self_paced">Self-paced access</option><option value="cohort">Scheduled cohort</option><option value="event">Single event / seminar</option><option value="academic_term">Academic term</option></select>
@@ -286,7 +286,7 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
             <div class="term-grid studio-terms">{studio.offerings.map((offering) => (
               <section class:list={["term-card", { active: offering.id === selectedOfferingId }]}>
                  <a href={studioUrl("offerings", offering.id)}><span>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{new Intl.NumberFormat("en-SG", { style: "currency", currency: offering.currency }).format(offering.price_cents / 100)}</strong><small>Tuition {(offering.creator_price_cents / 100).toFixed(2)} + platform {(offering.platform_fixed_fee_cents / 100).toFixed(2)} + service {(offering.service_fee_cents / 100).toFixed(2)}{offering.planned_meeting_cost_cents ? ` + planned meeting allocation` : ""}</small><small>{offering.status} · {offering.pricing_status}{offering.capacity ? ` · ${offering.capacity} places` : ""}</small></a>
-                {offering.status !== "published" && <form class="api-form publish-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="text-link" type="submit">Set Stripe price & publish offer</button><p class="form-message"></p></form>}
+                {offering.status !== "published" && <form class="api-form publish-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="text-link" type="submit">Open paid enrolment</button><p class="form-message"></p></form>}
               </section>
             ))}</div>
             {selectedOffering && <p class="form-success">Authoring content and sessions for <strong>{selectedOffering.title}</strong>.</p>}
@@ -297,10 +297,10 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
             {!studio.learners.length ? <p class="form-message">Learners will appear after their booking is confirmed.</p> : <div class="studio-roster">{studio.learners.map((learner) => <div><span class="tutor-avatar">{learner.display_name.slice(0, 1)}</span><span><strong>{learner.display_name}</strong><small>{learner.email} · {learner.offering_title}</small></span><span class="roster-progress"><strong>{learner.progress_percent}%</strong><small>{learner.status}</small></span></div>)}</div>}
             <hr class="studio-divider" />
             <span class="eyebrow">Reach learners</span><h2>Course invitations</h2>
-            <p>Invite learners to a specific published offering. Each recipient receives a private, expiring registration link.</p>
+            <p>Invite learners to a specific open enrolment option. Each recipient receives a private, expiring registration link.</p>
             <form class="stack-form api-form invitation-form" data-kind="invitation" action={`/api/tutor/courses/${studio.course.id}/invitations`} method="post">
-              <label>Course offering<select name="offeringId" required>
-                <option value="">Choose a published offering</option>
+              <label>Enrolment option<select name="offeringId" required>
+                <option value="">Choose an open enrolment option</option>
                 {studio.offerings.filter((offering) => offering.status === "published" && offering.pricing_status === "ready").map((offering) => (
                   <option value={offering.id} selected={offering.id === selectedOfferingId}>{offering.title}</option>
                 ))}
@@ -341,7 +341,7 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
             <div class="team-list">{team.map((member) => <section><span class="tutor-avatar">{member.display_name.slice(0, 1)}</span><div><strong>{member.display_name}</strong><small>{member.email} · {member.member_role} · {member.status}</small></div>{member.member_role !== "owner" && member.status === "active" && ["owner", "administrator", "platform_admin"].includes(courseRole || studio.course.member_role) && <form class="api-form" data-method="DELETE" action={`/api/tutor/courses/${studio.course.id}/team/${member.user_id}`} method="post"><button class="text-link danger-link" type="submit">Remove access</button><p class="form-message"></p></form>}</section>)}</div>
           </article>}
 
-          {activeSection === "sessions" && !selectedOffering && <article class="panel empty-state"><span class="eyebrow">Sessions</span><h2>Create an offering first</h2><p>Live and in-person sessions belong to a specific course offering.</p><a class="button" href={studioUrl("offerings")}>Open offerings</a></article>}
+          {activeSection === "sessions" && !selectedOffering && <article class="panel empty-state"><span class="eyebrow">Sessions</span><h2>Set up enrolment first</h2><p>Choose a price and enrolment option before scheduling live or in-person sessions.</p><a class="button" href={studioUrl("offerings")}>Set up enrolment</a></article>}
           {activeSection === "sessions" && selectedOffering && <article class="panel">
             <span class="eyebrow">Scheduled delivery</span><h2>Live and in-person sessions</h2>
             <form class="inline-form api-form" data-kind="session" action={`/api/tutor/offerings/${selectedOffering.id}/sessions`} method="post">
@@ -594,7 +594,7 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
                     : <p class="form-message">This course is published, but learners cannot enrol. Publish one of the offerings below.</p>
                   : <p class="form-success">This course is published and open for enrolment.</p>}
             </div>
-            <section class="publish-offerings"><h3>Offerings</h3>{studio.offerings.map((offering) => <div><span><strong>{offering.title}</strong><small>{offering.status} · pricing {offering.pricing_status}</small></span>{offering.status !== "published" ? <form class="api-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="button button-small" type="submit">Publish offering</button><p class="form-message"></p></form> : <span class="studio-status published">Published</span>}</div>)}</section>
+            <section class="publish-offerings"><h3>Enrolment options</h3>{studio.offerings.map((offering) => <div><span><strong>{offering.title}</strong><small>{offering.status} · pricing {offering.pricing_status}</small></span>{offering.status !== "published" ? <form class="api-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="button button-small" type="submit">Open enrolment</button><p class="form-message"></p></form> : <span class="studio-status published">Published</span>}</div>)}</section>
             {studio.course.status === "published" && <section class="listing-controls"><span class="eyebrow">Publication visibility</span><h3>{studio.course.listing_status === "listed" ? "This course is published and discoverable." : "This course is unpublished."}</h3><p>{studio.course.listing_status === "listed" ? "Unpublishing stops new bookings while preserving existing learner access, results and records." : studio.course.delisted_reason ?? "Existing learners continue to have access."}</p>{studio.course.listing_status === "listed" ? <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/delist`} method="post"><input name="reason" required minlength="3" placeholder="Reason for unpublishing" /><button class="button button-small button-danger" type="submit">Unpublish course</button><p class="form-message"></p></form> : <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/relist`} method="post"><button class="button button-small" type="submit">Republish course</button><p class="form-message"></p></form>}</section>}
           </article>}
         </>
