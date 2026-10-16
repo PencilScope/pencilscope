@@ -1,5 +1,6 @@
 import type { APIRoute } from "astro";
 import { getEnv } from "@/lib/runtime";
+import { turnstileErrorMessage, verifyTurnstile } from "@/lib/turnstile";
 
 export const POST: APIRoute = async ({ request, locals, session, redirect }) => {
   const form = await request.formData();
@@ -7,7 +8,18 @@ export const POST: APIRoute = async ({ request, locals, session, redirect }) => 
   const next = typeof requestedNext === "string" && requestedNext.startsWith("/") && !requestedNext.startsWith("//")
     ? requestedNext
     : "/dashboard";
-  const response = await getEnv(locals).API.fetch("https://pencilscope-api.internal/api/auth/login", {
+  const email = typeof form.get("email") === "string" ? String(form.get("email")) : "";
+  const env = getEnv(locals);
+  const verification = await verifyTurnstile(env, {
+    token: form.get("cf-turnstile-response"),
+    remoteIp: request.headers.get("CF-Connecting-IP"),
+    expectedAction: "login",
+    expectedHostname: new URL(request.url).hostname
+  });
+  if (!verification.success) {
+    return redirect(`/sign-in?error=${encodeURIComponent(turnstileErrorMessage(verification))}&next=${encodeURIComponent(next)}&email=${encodeURIComponent(email)}`, 303);
+  }
+  const response = await env.API.fetch("https://pencilscope-api.internal/api/auth/login", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -22,7 +34,7 @@ export const POST: APIRoute = async ({ request, locals, session, redirect }) => 
   session?.set("userId", result.user.id);
   const sessionId = crypto.randomUUID();
   session?.set("sessionId", sessionId);
-  await getEnv(locals).API.fetch("https://pencilscope-api.internal/api/sessions", {
+  await env.API.fetch("https://pencilscope-api.internal/api/sessions", {
     method: "POST",
     headers: {
       "content-type": "application/json",

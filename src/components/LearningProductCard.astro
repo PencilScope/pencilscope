@@ -3,15 +3,15 @@ import { learningProductMeta, type LearningProduct } from "@/lib/learning-produc
 import ProductIcon from "@/components/ProductIcon.astro";
 import { productCatalogueKey } from "@/lib/product-catalog";
 
-type Props = { product: LearningProduct; mode?: "catalogue" | "learning"; highlighted?: boolean };
-const { product, mode = "catalogue", highlighted = false } = Astro.props;
+type Props = { product: LearningProduct; mode?: "catalogue" | "learning"; highlighted?: boolean; href?: string };
+const { product, mode = "catalogue", highlighted = false, href = `/library/${product.slug}` } = Astro.props;
 const meta = learningProductMeta[product.product_type];
 const hasPricedOffer = Boolean(product.offer_course_slug && product.offer_title && product.offer_price_cents);
 const offerPrice = product.offer_price_cents ?? 0;
 const isLearningCard = mode === "learning";
 ---
 <article class:list={["product-card", `product-${product.product_type}`, { "newly-enrolled-card": highlighted }]}>
-  <a class="product-card-link" href={`/library/${product.slug}`}>
+  <a class="product-card-link" href={href}>
     <div class="product-card-top">
       <ProductIcon name={productCatalogueKey(product.product_type)} />
       <span class="product-type">{meta.label}</span>

@@ -66,6 +66,7 @@ let studio: {
     currency: string; status: string;
     pricing_status: string; academic_year: number; term_number: number;
     offering_type: string; delivery_mode: string; starts_at: string | null; ends_at: string | null; capacity: number | null;
+    enrolment_opens_at: string | null; enrolment_closes_at: string | null; access_ends_at: string | null;
   }>;
   materials: Array<{ id: string; title: string; description: string; material_type: string; resource_kind: string; content_kind: string; status: string }>;
   offeringModules: Array<{ course_offering_id: string; module_id: string }>;
@@ -280,12 +281,12 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
               <input name="plannedMeetingMinutes" type="number" min="0" value="0" placeholder="Total live minutes" />
               <input name="plannedMeetingParticipants" type="number" min="0" value="0" placeholder="Participants incl. hosts" />
               <input name="plannedPaidLearners" type="number" min="1" value="1" placeholder="Planned paid learners" />
-              <label>Starts<input name="startsAt" type="datetime-local" /></label><label>Ends<input name="endsAt" type="datetime-local" /></label>
+              <fieldset class="offering-date-group"><legend>Delivery schedule</legend><label>Course starts<input name="startsAt" type="datetime-local" /></label><label>Course ends<input name="endsAt" type="datetime-local" /></label></fieldset><fieldset class="offering-date-group"><legend>Publishing and learner access</legend><label>Bookings open<input name="enrolmentOpensAt" type="datetime-local" /></label><label>Bookings close<input name="enrolmentClosesAt" type="datetime-local" /></label><label>Learning access ends<input name="accessEndsAt" type="datetime-local" /></label><small>Opening the offer publishes it. These dates control when learners can book and how long access remains available.</small></fieldset>
               <button class="button button-small" type="submit">Create draft offer</button><p class="form-message"></p>
             </form>
             <div class="term-grid studio-terms">{studio.offerings.map((offering) => (
               <section class:list={["term-card", { active: offering.id === selectedOfferingId }]}>
-                 <a href={studioUrl("offerings", offering.id)}><span>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{new Intl.NumberFormat("en-SG", { style: "currency", currency: offering.currency }).format(offering.price_cents / 100)}</strong><small>Tuition {(offering.creator_price_cents / 100).toFixed(2)} + platform {(offering.platform_fixed_fee_cents / 100).toFixed(2)} + service {(offering.service_fee_cents / 100).toFixed(2)}{offering.planned_meeting_cost_cents ? ` + planned meeting allocation` : ""}</small><small>{offering.status} · {offering.pricing_status}{offering.capacity ? ` · ${offering.capacity} places` : ""}</small></a>
+                 <a href={studioUrl("offerings", offering.id)}><span>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{new Intl.NumberFormat("en-SG", { style: "currency", currency: offering.currency }).format(offering.price_cents / 100)}</strong><small>Tuition {(offering.creator_price_cents / 100).toFixed(2)} + platform {(offering.platform_fixed_fee_cents / 100).toFixed(2)} + service {(offering.service_fee_cents / 100).toFixed(2)}{offering.planned_meeting_cost_cents ? ` + planned meeting allocation` : ""}</small><small>{offering.status} · {offering.pricing_status}{offering.capacity ? ` · ${offering.capacity} places` : ""}</small><small>{offering.enrolment_opens_at ? `Bookings open ${new Date(offering.enrolment_opens_at).toLocaleString("en-SG")}` : "Bookings open immediately after publishing"}{offering.enrolment_closes_at ? ` · close ${new Date(offering.enrolment_closes_at).toLocaleString("en-SG")}` : ""}{offering.access_ends_at ? ` · access ends ${new Date(offering.access_ends_at).toLocaleString("en-SG")}` : ""}</small></a>
                 {offering.status !== "published" && <form class="api-form publish-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="text-link" type="submit">Open paid enrolment</button><p class="form-message"></p></form>}
               </section>
             ))}</div>
@@ -635,6 +636,9 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
             priceCents: Math.round(Number(values.priceSGD) * 100),
             startsAt: values.startsAt ? new Date(String(values.startsAt)).toISOString() : null,
             endsAt: values.endsAt ? new Date(String(values.endsAt)).toISOString() : null,
+            enrolmentOpensAt: values.enrolmentOpensAt ? new Date(String(values.enrolmentOpensAt)).toISOString() : null,
+            enrolmentClosesAt: values.enrolmentClosesAt ? new Date(String(values.enrolmentClosesAt)).toISOString() : null,
+            accessEndsAt: values.accessEndsAt ? new Date(String(values.accessEndsAt)).toISOString() : null,
             timezone: "Asia/Singapore"
           };
           delete body.priceSGD;

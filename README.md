@@ -96,6 +96,17 @@ pnpm exec wrangler secret put FACEBOOK_APP_ID --config workers/api/wrangler.json
 pnpm exec wrangler secret put FACEBOOK_APP_SECRET --config workers/api/wrangler.jsonc --env production
 ```
 
+Email registration and sign-in use Cloudflare Turnstile. Create separate managed widgets for UAT and production, restrict each widget to its environment hostnames, and configure both the public site key and private secret on the web Worker:
+
+```powershell
+pnpm exec wrangler secret put TURNSTILE_SITE_KEY --env uat
+pnpm exec wrangler secret put TURNSTILE_SECRET_KEY --env uat
+pnpm exec wrangler secret put TURNSTILE_SITE_KEY --env production
+pnpm exec wrangler secret put TURNSTILE_SECRET_KEY --env production
+```
+
+Local development falls back to Cloudflare's official always-pass test keys. Production environments fail closed when either deployed key is missing.
+
 New social users continue through the same onboarding flow as email registrations. When a provider returns the same normalized email as an active PencilScope account, its provider identity is linked to that account instead of creating a duplicate.
 
 Configure separate Stripe webhook endpoints for:

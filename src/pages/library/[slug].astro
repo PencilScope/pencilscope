@@ -4,6 +4,7 @@ import { findLearningProductBySlug, requestApi } from "@/lib/api-client";
 import { learningProductMeta } from "@/lib/learning-products";
 
 const { slug } = Astro.params;
+const embedded = Astro.url.searchParams.get("embedded") === "1";
 const sessionUserId = await Astro.session?.get("userId");
 const userId = typeof sessionUserId === "string" ? sessionUserId : undefined;
 const product = slug ? await findLearningProductBySlug(slug, userId) : undefined;
@@ -70,7 +71,7 @@ const assessmentGuidance = product.product_type === "quiz"
     ? "Complete every question before submitting. Your score will be recorded in Results."
     : "Use the timer and complete the full paper before submitting your mock exam.";
 ---
-<BaseLayout title={`${product.title} — PencilScope`} description={product.description}>
+<BaseLayout title={`${product.title} — PencilScope`} description={product.description} embedded={embedded}>
   <section class:list={["product-detail-hero", `product-${product.product_type}`]}>
     <div class="shell product-detail-heading">
       <a class="back-link" href={hasAccess ? "/dashboard?workspace=learning&section=learning" : "/library"}>← {hasAccess ? "My Learning" : "Learning library"}</a>

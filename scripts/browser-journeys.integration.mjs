@@ -91,6 +91,8 @@ const assertHealthyPage = async (label) => {
 };
 const login = async (email, password) => {
   await navigate(site + "/sign-in");
+  assert.ok(await evaluate("Boolean(document.querySelector('.cf-turnstile'))"), "sign-in is missing Turnstile");
+  await waitUntil("Boolean(document.querySelector('[name=\"cf-turnstile-response\"]')?.value)", "Turnstile verification");
   const expression = "(() => {const form=document.querySelector('form[action=\"/api/auth/login\"]');" +
     "form.elements.email.value=" + JSON.stringify(email) + ";" +
     "form.elements.password.value=" + JSON.stringify(password) + ";" +
@@ -115,10 +117,18 @@ try {
   }
   assert.match(home.text, /experts|experience/i);
   assert.ok(await evaluate("Boolean(document.querySelector('a[href^=\"/sign-in\"]'))"));
+  await navigate(site + "/sign-in");
+  await assertHealthyPage("sign-in page");
+  assert.equal(await evaluate("document.querySelector('.cf-turnstile')?.dataset.action"), "login");
+  await navigate(site + "/register");
+  await assertHealthyPage("registration page");
+  assert.equal(await evaluate("document.querySelector('.cf-turnstile')?.dataset.action"), "register");
 
   if (process.env.BROWSER_LANDING_ONLY !== "1") {
   await login("browser-learner-20261014@example.com", "BrowserTest!2026");
   assert.equal(await evaluate("location.pathname"), "/dashboard");
+  assert.ok(await evaluate("Boolean(document.querySelector('a[href*=\"state=active\"]'))"), "learner overview is missing active-learning drill-down");
+  assert.ok(await evaluate("Boolean(document.querySelector('a[href*=\"state=completed\"]'))"), "learner overview is missing completed-learning drill-down");
   for (const route of ["/courses", "/library", "/my-learning", "/my-results", "/payments", "/profile"]) {
     await navigate(site + route);
     const page = await assertHealthyPage("learner " + route);
@@ -132,11 +142,21 @@ try {
   await command("Network.clearBrowserCookies");
   await login("browser-creator-20261014@example.com", "BrowserTest!2026");
   assert.equal(await evaluate("location.pathname"), "/dashboard");
+  await navigate(site + "/dashboard?workspace=creation&section=content");
+  assert.equal(await evaluate("[...document.querySelectorAll('summary')].filter((item)=>item.textContent.includes('+ Create product')).length"), 1, "Creator Studio must show one Create product control");
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-ai-creator]'))"), "Creator Studio is missing Connect and create with AI");
+  await navigate(site + "/dashboard?workspace=creation&section=overview");
+  assert.ok(await evaluate("Boolean(document.querySelector('a[href*=\"status=published\"]'))"), "creator overview is missing published drill-down");
+  assert.ok(await evaluate("Boolean(document.querySelector('a[href*=\"booked=yes\"]'))"), "creator overview is missing products-with-bookings drill-down");
   for (const route of ["/tutor", "/create", "/content-library", "/payments", "/action-history"]) {
     await navigate(site + route);
     const page = await assertHealthyPage("creator " + route);
     assert.ok(!page.href.includes("/sign-in"), "creator was signed out at " + route);
   }
+  await navigate(site + "/tutor");
+  assert.ok(await evaluate("Boolean(document.querySelector('[name=\"enrolmentOpensAt\"]'))"), "Course Studio is missing bookings-open date");
+  assert.ok(await evaluate("Boolean(document.querySelector('[name=\"enrolmentClosesAt\"]'))"), "Course Studio is missing bookings-close date");
+  assert.ok(await evaluate("Boolean(document.querySelector('[name=\"accessEndsAt\"]'))"), "Course Studio is missing access-end date");
   await navigate(site + "/create");
   assert.match(await bodyText(), /Connect and create with AI/i);
   assert.match(await bodyText(), /step|choose|connect/i);
@@ -177,7 +197,7 @@ try {
     throw new Error("Browser journey defects:\n- " + issues.join("\n- "));
   }
   process.stdout.write(process.env.BROWSER_LANDING_ONLY === "1"
-    ? "Browser landing journey passed: approved heading rendered.\n"
+    ? "Browser public pages passed: landing, sign-in and registration render with Turnstile protection.\n"
     : "Browser journeys passed: public landing, learner sign-in and protected pages, creator tools, billing dashboard tabs, and system-admin dashboards.\n");
 } finally {
   try { socket.close(); } catch {}
