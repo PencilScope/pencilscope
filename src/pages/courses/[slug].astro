@@ -193,7 +193,7 @@ const contentLabel = (value: string) => value.replaceAll("_", " ").replace(/\b\w
         attempts += 1;
         try {
           const response = await fetch(`/api/checkout/status?sessionId=${encodeURIComponent(checkoutSession)}`, { headers: { accept: "application/json" } });
-          const result = await response.json() as { status?: string; courseId?: string; courseSlug?: string; courseTitle?: string; productCount?: number };
+          const result = await response.json() as { status?: string; orderId?: string; courseId?: string; courseSlug?: string; courseTitle?: string; productCount?: number };
           if (response.ok && result.status === "confirmed" && result.courseId) {
             confirmation.classList.remove("checkout-pending");
             confirmation.classList.add("checkout-confirmed");
@@ -201,7 +201,7 @@ const contentLabel = (value: string) => value.replaceAll("_", " ").replace(/\b\w
               ? `${result.courseTitle ?? "Your course"} and ${result.productCount} included product${result.productCount === 1 ? "" : "s"} have been added to My Learning.`
               : `${result.courseTitle ?? "Your course"} has been added to My Learning.`;
             window.setTimeout(() => {
-              window.location.href = `/dashboard?workspace=learning&section=learning&enrolledCourse=${encodeURIComponent(result.courseId ?? "")}&enrolledSlug=${encodeURIComponent(result.courseSlug ?? "")}`;
+              window.location.href = `/dashboard?workspace=learning&section=learning&purchase=${encodeURIComponent(result.orderId ?? "")}`;
             }, 1800);
             return;
           }

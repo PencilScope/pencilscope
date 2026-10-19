@@ -340,6 +340,31 @@ async function courseOfferingsBySlug(env: ApiEnvironment, slug: string): Promise
   });
 }
 
+async function checkoutCustomer(
+  env: ApiEnvironment,
+  stripe: Stripe,
+  user: { id: string; email: string }
+): Promise<string> {
+  const existing = await env.DB.prepare(
+    "SELECT stripe_customer_id, email FROM stripe_customers WHERE user_id = ?"
+  ).bind(user.id).first<{ stripe_customer_id: string; email: string }>();
+  const now = new Date().toISOString();
+  if (existing?.stripe_customer_id) {
+    await stripe.customers.update(existing.stripe_customer_id, { email: user.email });
+    if (existing.email !== user.email) {
+      await env.DB.prepare("UPDATE stripe_customers SET email = ?, updated_at = ? WHERE user_id = ?")
+        .bind(user.email, now, user.id).run();
+    }
+    return existing.stripe_customer_id;
+  }
+  const customer = await stripe.customers.create({ email: user.email, metadata: { pencilscopeUserId: user.id } });
+  await env.DB.prepare(
+    `INSERT INTO stripe_customers (user_id, stripe_customer_id, email, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(user.id, customer.id, user.email, now, now).run();
+  return customer.id;
+}
+
 async function checkout(request: Request, env: ApiEnvironment): Promise<Response> {
   const traceId = request.headers.get("x-pencilscope-trace-id") ?? crypto.randomUUID();
   const form = await request.formData();
@@ -357,10 +382,10 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
   const actorId = authenticatedUserId(request);
   if (!actorId) return problem(401, "authentication_required", "Sign in before enrolling.");
   const actor = await env.DB.prepare(
-    `SELECT u.id, u.role, COALESCE(ap.account_type, 'individual') AS account_type
+    `SELECT u.id, u.email, u.role, COALESCE(ap.account_type, 'individual') AS account_type
      FROM users u LEFT JOIN account_profiles ap ON ap.user_id = u.id
      WHERE u.id = ? AND u.status = 'active'`
-  ).bind(actorId).first<{ id: string; role: string; account_type: "individual" | "organization" }>();
+  ).bind(actorId).first<{ id: string; email: string; role: string; account_type: "individual" | "organization" }>();
   if (!actor) return problem(401, "authentication_required", "Sign in before enrolling.");
   if (typeof requestedStudentId === "string" && requestedStudentId && requestedStudentId !== actor.id) {
     return problem(403, "self_enrolment_required", "Book this course using your own account.");
@@ -397,8 +422,11 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
     }
     try {
       const stripe = createStripe(requireSecret(env, "STRIPE_SECRET_KEY"));
+      const customer = await checkoutCustomer(env, stripe, actor);
       const session = await stripe.checkout.sessions.create({
         mode: "payment",
+        customer,
+        client_reference_id: actor.id,
         line_items: [{ price: offer.stripe_price_id, quantity: 1 }],
         success_url: `${env.APP_URL}/offers/product-${offer.id}?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${env.APP_URL}/offers/product-${offer.id}?checkout=cancelled`,
@@ -465,8 +493,11 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
 
   try {
     const stripe = createStripe(requireSecret(env, "STRIPE_SECRET_KEY"));
+    const customer = await checkoutCustomer(env, stripe, actor);
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
+      customer,
+      client_reference_id: actor.id,
       line_items: [{ price: course.stripe_price_id, quantity: 1 }],
       success_url: invitationToken
         ? `${env.APP_URL}/invite/${encodeURIComponent(String(invitationToken))}?checkout=success&session_id={CHECKOUT_SESSION_ID}`
@@ -503,7 +534,7 @@ async function checkoutStatus(request: Request, env: ApiEnvironment): Promise<Re
     return problem(400, "invalid_checkout_session", "Choose a valid checkout session.");
   }
   const enrolment = await env.DB.prepare(
-    `SELECT e.id AS enrolment_id, e.course_id, eo.course_offering_id,
+    `SELECT o.id AS order_id, o.product_offer_id, e.id AS enrolment_id, e.course_id, eo.course_offering_id,
       c.slug AS course_slug, c.title AS course_title, co.title AS offering_title,
       ((SELECT COUNT(*) FROM course_offering_learning_products olp
         WHERE olp.course_offering_id = eo.course_offering_id)
@@ -519,12 +550,14 @@ async function checkoutStatus(request: Request, env: ApiEnvironment): Promise<Re
        AND eo.status IN ('active', 'completed')
      LIMIT 1`
   ).bind(sessionId, actorId).first<{
-    enrolment_id: string; course_id: string; course_offering_id: string;
+    order_id: string; product_offer_id: string | null; enrolment_id: string; course_id: string; course_offering_id: string;
     course_slug: string; course_title: string; offering_title: string; product_count: number;
   }>();
   if (!enrolment) return json({ status: "pending" });
   return json({
     status: "confirmed",
+    orderId: enrolment.order_id,
+    productOfferId: enrolment.product_offer_id,
     enrolmentId: enrolment.enrolment_id,
     courseId: enrolment.course_id,
     offeringId: enrolment.course_offering_id,
@@ -814,12 +847,12 @@ async function createCourse(request: Request, env: ApiEnvironment): Promise<Resp
 
   const statements = [env.DB.prepare(
     `INSERT INTO courses
-      (id, tutor_id, slug, title, description, subject, primary_level, delivery_mode,
+      (id, tutor_id, slug, title, description, subject, primary_level, language_code, delivery_mode,
        price_cents, creator_price_cents, currency, status, pricing_status, pricing_version, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'pending', 1, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'pending', 1, ?, ?)`
   ).bind(
     id, actor.id, slug, input.title, input.description, input.subject,
-    input.primaryLevel, input.deliveryMode, breakdown.checkoutPriceCents,
+    input.primaryLevel, input.languageCode, input.deliveryMode, breakdown.checkoutPriceCents,
     breakdown.creatorPriceCents, input.currency, now, now
   ), env.DB.prepare(
     `INSERT INTO course_members

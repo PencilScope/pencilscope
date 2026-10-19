@@ -420,6 +420,12 @@ try {
         method: "POST", headers: learnerHeaders, body: { answers: [0] }
       }));
       assert.equal(attempt.result.passed, true);
+      const resultDetail = await json(await api(`/api/my-results/product/${encodeURIComponent(attempt.result.attemptId)}`, {
+        headers: learnerHeaders
+      }));
+      assert.equal(resultDetail.kind, "product");
+      assert.equal(resultDetail.questions[0].is_correct, 1);
+      assert.equal(resultDetail.questions[0].selected_answer, resultDetail.questions[0].correct_answer);
     } else {
       await json(await api(`/api/learning-products/${encodeURIComponent(product.slug)}/progress`, {
         method: "PATCH",
@@ -447,6 +453,12 @@ try {
     method: "POST", headers: learnerHeaders, body: {}
   }));
   assert.equal(submitted.result.passed, true);
+  const courseResultDetail = await json(await api(`/api/my-results/course/${encodeURIComponent(started.attempt.id)}`, {
+    headers: learnerHeaders
+  }));
+  assert.equal(courseResultDetail.kind, "course");
+  assert.equal(courseResultDetail.questions[0].is_correct, 1);
+  assert.equal(courseResultDetail.questions[0].selected_answer, courseResultDetail.questions[0].correct_answer);
 
   process.stdout.write("Product journeys passed: 3 course formats, audio book, uploaded and native ebooks, reading, video, quiz, test and mock exam.\n");
 } finally {

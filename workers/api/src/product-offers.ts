@@ -107,9 +107,10 @@ async function createOffer(request: Request, env: ApiEnvironment, creatorId: str
   if (!await validateProducts(env.DB, creatorId, productIds)) return problem(400, "invalid_products", "Choose standalone products you own.");
   if (!await validateCourseOfferings(env.DB, creatorId, courseOfferingIds)) return problem(400, "invalid_courses", "Choose published course offers you own.");
   const courseRows = courseOfferingIds.length ? await env.DB.prepare(
-    `SELECT co.id AS course_offering_id, co.course_id FROM course_offerings co
+    `SELECT co.id AS course_offering_id, co.course_id, c.content_version FROM course_offerings co
+     JOIN courses c ON c.id = co.course_id
      WHERE co.id IN (${courseOfferingIds.map(() => "?").join(",")})`
-  ).bind(...courseOfferingIds).all<{ course_offering_id: string; course_id: string }>() : { results: [] };
+  ).bind(...courseOfferingIds).all<{ course_offering_id: string; course_id: string; content_version: number }>() : { results: [] };
   const id = crypto.randomUUID();
   const courseId = `commerce-${id}`;
   const offeringId = `commerce-offering-${id}`;
@@ -136,15 +137,16 @@ async function createOffer(request: Request, env: ApiEnvironment, creatorId: str
       optionalDate(body.enrolmentClosesAt), optionalDate(body.accessEndsAt),
       body.capacity == null || body.capacity === "" ? null : Number(body.capacity), courseId, offeringId, now, now),
     ...productIds.flatMap((productId, index) => [
-      env.DB.prepare(`INSERT INTO product_offer_items (product_offer_id, learning_product_id, position, created_at) VALUES (?, ?, ?, ?)`)
-        .bind(id, productId, index + 1, now),
+      env.DB.prepare(`INSERT INTO product_offer_items (product_offer_id, learning_product_id, position, created_at, content_version)
+        SELECT ?, id, ?, ?, content_version FROM learning_products WHERE id = ?`)
+        .bind(id, index + 1, now, productId),
       env.DB.prepare(`INSERT INTO course_offering_learning_products (course_offering_id, learning_product_id, position) VALUES (?, ?, ?)`)
         .bind(offeringId, productId, index + 1)
     ]),
     ...courseRows.results.map((course, index) => env.DB.prepare(
-      `INSERT INTO product_offer_course_items (product_offer_id, course_id, course_offering_id, position, created_at)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(id, course.course_id, course.course_offering_id, productIds.length + index + 1, now))
+      `INSERT INTO product_offer_course_items (product_offer_id, course_id, course_offering_id, position, created_at, content_version)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, course.course_id, course.course_offering_id, productIds.length + index + 1, now, course.content_version))
   ]);
   return json({ offer: await offerDetail(env.DB, id, creatorId) }, { status: 201 });
 }
@@ -183,8 +185,9 @@ async function addItem(request: Request, env: ApiEnvironment, creatorId: string,
   const position = Number.isInteger(body.position) && Number(body.position) > 0 ? Number(body.position) : Number(offer.product_count) + 1;
   const now = new Date().toISOString();
   await env.DB.batch([
-    env.DB.prepare(`INSERT INTO product_offer_items (product_offer_id, learning_product_id, position, created_at) VALUES (?, ?, ?, ?)
-      ON CONFLICT(product_offer_id, learning_product_id) DO UPDATE SET position = excluded.position`).bind(id, productId, position, now),
+    env.DB.prepare(`INSERT INTO product_offer_items (product_offer_id, learning_product_id, position, created_at, content_version)
+      SELECT ?, id, ?, ?, content_version FROM learning_products WHERE id = ?
+      ON CONFLICT(product_offer_id, learning_product_id) DO UPDATE SET position = excluded.position, content_version = excluded.content_version`).bind(id, position, now, productId),
     env.DB.prepare(`INSERT INTO course_offering_learning_products (course_offering_id, learning_product_id, position) VALUES (?, ?, ?)
       ON CONFLICT(course_offering_id, learning_product_id) DO UPDATE SET position = excluded.position`).bind(offer.commerce_offering_id, productId, position)
   ]);

@@ -53,6 +53,7 @@ type StoredProduct = {
   description: string;
   subject: string;
   audience: string;
+  language_code: string;
   content_url: string | null;
   content_json: string;
   estimated_minutes: number | null;
@@ -382,6 +383,7 @@ type CreatePayload = {
   status?: unknown;
   metadataOnly?: unknown;
   primaryLibraryItemId?: unknown;
+  languageCode?: unknown;
 };
 
 function cleanText(value: unknown, limit: number): string {
@@ -450,6 +452,8 @@ async function createProduct(request: Request, env: ApiEnvironment): Promise<Res
   const description = cleanText(payload.description, 2000);
   const subject = cleanText(payload.subject, 120);
   const audience = cleanText(payload.audience, 120);
+  const languageCode = /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(cleanText(payload.languageCode, 10))
+    ? cleanText(payload.languageCode, 10) : "en";
   if (title.length < 3 || description.length < 20 || !subject || !audience) {
     return problem(400, "invalid_product", "Add a title, a description of at least 20 characters, a topic and an audience.");
   }
@@ -511,13 +515,13 @@ async function createProduct(request: Request, env: ApiEnvironment): Promise<Res
   const statements = [
     env.DB.prepare(
     `INSERT INTO learning_products
-      (id, creator_id, slug, product_type, title, description, subject, audience,
+      (id, creator_id, slug, product_type, title, description, subject, audience, language_code,
        content_url, content_json, estimated_minutes, price_cents, currency, status,
        published_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'SGD', ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'SGD', ?, ?, ?, ?)`
   ).bind(
     id, actor.id, slug, payload.productType, title, description, subject, audience,
-    contentUrl, JSON.stringify(content), estimatedMinutes, status,
+    languageCode, contentUrl, JSON.stringify(content), estimatedMinutes, status,
     status === "published" ? now : null, now, now
     ),
     env.DB.prepare(
@@ -570,6 +574,8 @@ async function updateProduct(request: Request, env: ApiEnvironment, id: string):
   const description = cleanText(payload.description, 2000);
   const subject = cleanText(payload.subject, 120);
   const audience = cleanText(payload.audience, 120);
+  const languageCode = /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(cleanText(payload.languageCode, 10))
+    ? cleanText(payload.languageCode, 10) : "en";
   if (title.length < 3 || description.length < 20 || !subject || !audience) {
     return problem(400, "invalid_product", "Add a title, a description of at least 20 characters, a topic and an audience.");
   }
@@ -581,9 +587,9 @@ async function updateProduct(request: Request, env: ApiEnvironment, id: string):
     let metadataUpdate;
     if (isAssessmentProduct(existing.product_type)) {
       metadataUpdate = env.DB.prepare(
-        `UPDATE learning_products SET title = ?, description = ?, subject = ?, audience = ?,
+        `UPDATE learning_products SET title = ?, description = ?, subject = ?, audience = ?, language_code = ?,
           estimated_minutes = ?, updated_at = ? WHERE id = ?`
-      ).bind(title, description, subject, audience, estimatedMinutes, new Date().toISOString(), id);
+      ).bind(title, description, subject, audience, languageCode, estimatedMinutes, new Date().toISOString(), id);
     } else {
       const rawUrl = cleanText(payload.contentUrl, 2000);
       let resourceUrl = existing.content_url ?? "";
@@ -599,9 +605,9 @@ async function updateProduct(request: Request, env: ApiEnvironment, id: string):
         }
       }
       metadataUpdate = env.DB.prepare(
-        `UPDATE learning_products SET title = ?, description = ?, subject = ?, audience = ?,
+        `UPDATE learning_products SET title = ?, description = ?, subject = ?, audience = ?, language_code = ?,
           content_url = ?, estimated_minutes = ?, updated_at = ? WHERE id = ?`
-      ).bind(title, description, subject, audience, resourceUrl, estimatedMinutes, new Date().toISOString(), id);
+      ).bind(title, description, subject, audience, languageCode, resourceUrl, estimatedMinutes, new Date().toISOString(), id);
     }
     const now = new Date().toISOString();
     await env.DB.batch([
@@ -660,10 +666,10 @@ async function updateProduct(request: Request, env: ApiEnvironment, id: string):
   const now = new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare(
-    `UPDATE learning_products SET title = ?, description = ?, subject = ?, audience = ?,
+    `UPDATE learning_products SET title = ?, description = ?, subject = ?, audience = ?, language_code = ?,
       content_url = ?, content_json = ?, estimated_minutes = ?, updated_at = ? WHERE id = ?`
   ).bind(
-    title, description, subject, audience, contentUrl, JSON.stringify(content), estimatedMinutes,
+    title, description, subject, audience, languageCode, contentUrl, JSON.stringify(content), estimatedMinutes,
     now, id
     ),
     env.DB.prepare(
@@ -743,6 +749,15 @@ async function productLifecycle(
   if (product.status !== "published") {
     return problem(409, "learning_product_not_published", "Only published content can be unpublished or republished.");
   }
+  if (action === "unpublish") {
+    const liveOffer = await env.DB.prepare(
+      `SELECT po.id, po.title FROM product_offer_items pi JOIN product_offers po ON po.id = pi.product_offer_id
+       WHERE pi.learning_product_id = ? AND po.status = 'published' LIMIT 1`
+    ).bind(id).first<{ id: string; title: string }>();
+    if (liveOffer) {
+      return problem(409, "product_in_live_offer", `Close the live offer “${liveOffer.title}” before unpublishing this product.`);
+    }
+  }
   const listingStatus = action === "unpublish" ? "unpublished" : "listed";
   const now = new Date().toISOString();
   await env.DB.batch([
@@ -788,13 +803,13 @@ async function copyProduct(request: Request, env: ApiEnvironment, id: string): P
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO learning_products
-        (id, creator_id, slug, product_type, title, description, subject, audience,
+        (id, creator_id, slug, product_type, title, description, subject, audience, language_code,
          content_url, content_json, estimated_minutes, price_cents, currency, status,
          published_at, created_at, updated_at, source_product_id, content_version, listing_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, ?, ?, ?, ?, 'listed')`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, ?, ?, ?, ?, 'listed')`
     ).bind(
       newId, source.creator_id, slug, source.product_type, source.title, source.description,
-      source.subject, source.audience, source.content_url, source.content_json,
+      source.subject, source.audience, source.language_code, source.content_url, source.content_json,
       source.estimated_minutes, source.price_cents, source.currency, now, now, rootId, version
     ),
     env.DB.prepare(
@@ -886,7 +901,21 @@ async function myProducts(request: Request, env: ApiEnvironment): Promise<Respon
        p.published_at
      ) DESC`
   ).bind(actor.id, actor.id, new Date().toISOString(), actor.id, actor.id).all<StoredProduct>();
-  return json({ products: result.results.map((product) => publicProduct(product, false, true)) });
+  const accessOrders = await env.DB.prepare(
+    `SELECT olp.learning_product_id, eo.order_id
+     FROM course_offering_learning_products olp
+     JOIN enrolment_offerings eo ON eo.course_offering_id = olp.course_offering_id
+     WHERE eo.student_user_id = ? AND eo.status IN ('active', 'completed')
+     ORDER BY eo.enrolled_at DESC`
+  ).bind(actor.id).all<{ learning_product_id: string; order_id: string | null }>();
+  const orderByProduct = new Map<string, string | null>();
+  accessOrders.results.forEach((row) => {
+    if (!orderByProduct.has(row.learning_product_id)) orderByProduct.set(row.learning_product_id, row.order_id);
+  });
+  return json({ products: result.results.map((product) => ({
+    ...publicProduct(product, false, true),
+    access_order_id: orderByProduct.get(product.id) ?? null
+  })) });
 }
 
 async function submitAttempt(request: Request, env: ApiEnvironment, slug: string): Promise<Response> {
@@ -927,12 +956,13 @@ async function submitAttempt(request: Request, env: ApiEnvironment, slug: string
   const passingScore = Number.isFinite(config.passingScore) ? Number(config.passingScore) : 50;
   const passed = scorePercent >= passingScore;
   const now = new Date().toISOString();
+  const attemptId = crypto.randomUUID();
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO learning_product_attempts
         (id, learning_product_id, user_id, answers_json, score_percent, passed, submitted_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(crypto.randomUUID(), product.id, actor.id, JSON.stringify(answers), scorePercent, passed ? 1 : 0, now),
+    ).bind(attemptId, product.id, actor.id, JSON.stringify(answers), scorePercent, passed ? 1 : 0, now),
     env.DB.prepare(
       `INSERT INTO learning_product_entitlements (id, learning_product_id, user_id, status, granted_at, completed_at)
        VALUES (?, ?, ?, 'completed', ?, ?)
@@ -957,6 +987,7 @@ async function submitAttempt(request: Request, env: ApiEnvironment, slug: string
   ]);
   return json({
     result: {
+      attemptId,
       scorePercent,
       correct,
       total: questions.length,

@@ -11,6 +11,7 @@ export type CreateCourseInput = {
   currency: "SGD";
   publish: boolean;
   categorySlugs: string[];
+  languageCode: string;
 };
 
 export function parseCreateCourseInput(value: unknown): CreateCourseInput {
@@ -38,6 +39,8 @@ export function parseCreateCourseInput(value: unknown): CreateCourseInput {
       .filter(Boolean)
       .slice(0, 10)
     : [];
+  const languageCode = typeof input.languageCode === "string" && /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(input.languageCode)
+    ? input.languageCode : "en";
 
   return {
     title,
@@ -48,7 +51,8 @@ export function parseCreateCourseInput(value: unknown): CreateCourseInput {
     priceCents: hasPrice ? Number(input.priceCents) : 0,
     currency: "SGD",
     publish,
-    categorySlugs
+    categorySlugs,
+    languageCode
   };
 }
 

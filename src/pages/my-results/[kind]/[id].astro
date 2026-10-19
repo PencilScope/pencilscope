@@ -1,0 +1,47 @@
+---
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { requestApi } from "@/lib/api-client";
+
+const userId = await Astro.session?.get("userId");
+if (typeof userId !== "string") return Astro.redirect(`/sign-in?next=${encodeURIComponent(Astro.url.pathname)}`);
+const kind = Astro.params.kind === "course" ? "course" : Astro.params.kind === "product" ? "product" : null;
+const attemptId = Astro.params.id ?? "";
+if (!kind || !attemptId) return Astro.redirect("/my-results");
+const response = await requestApi(`/api/my-results/${kind}/${encodeURIComponent(attemptId)}`, { userId });
+if (response.status === 401) return Astro.redirect(`/sign-in?next=${encodeURIComponent(Astro.url.pathname)}`);
+if (!response.ok) return Astro.redirect("/dashboard?workspace=learning&section=results");
+const data = await response.json<{
+  kind: "course" | "product";
+  revealAnswers: boolean;
+  attempt: {
+    id: string; title: string; course_title?: string; assessment_type?: string; product_type?: string;
+    status?: string; score: number | null; passed: number | null; passing_score?: number;
+    submitted_at: string | null; started_at?: string; instructions?: string;
+  };
+  questions: Array<{
+    id: string; position: number; prompt: string; selected_answer: string | null;
+    text_response?: string | null; correct_answer: string | null; is_correct: number | null;
+    awarded_points?: number | null; points?: number; explanation: string;
+  }>;
+}>();
+const attempt = data.attempt;
+const submittedAt = attempt.submitted_at ?? attempt.started_at;
+---
+<BaseLayout title={`${attempt.title} result — PencilScope`}>
+  <section class="dashboard-hero dashboard-hero-compact"><div class="shell"><a class="back-link" href="/dashboard?workspace=learning&section=results">← All results</a><span class="eyebrow">Completed assessment</span><h1>{attempt.title}</h1><p>{attempt.course_title ?? attempt.product_type?.replaceAll("_", " ") ?? "Learning product"}</p></div></section>
+  <main class="shell result-detail-layout">
+    <section class="panel result-summary-panel">
+      <div><span class="eyebrow">Your result</span><strong>{attempt.score === null ? "Pending" : `${attempt.score}%`}</strong><span class:list={["result-outcome", { passed: attempt.passed === 1 }]}>{attempt.score === null ? "Awaiting grading" : attempt.passed ? "Passed" : "Not passed yet"}</span></div>
+      <dl><div><dt>Submitted</dt><dd>{submittedAt ? new Date(submittedAt).toLocaleString("en-SG") : "Not available"}</dd></div>{attempt.passing_score !== undefined && <div><dt>Passing score</dt><dd>{attempt.passing_score}%</dd></div>}<div><dt>Questions</dt><dd>{data.questions.length}</dd></div></dl>
+    </section>
+    {!data.revealAnswers && <p class="panel form-message">Correct answers and explanations will appear after this assessment closes.</p>}
+    <section class="result-review-list" aria-label="Answer review">
+      {data.questions.map((question, index) => <article class:list={["panel", "result-review-card", { correct: question.is_correct === 1, incorrect: question.is_correct === 0 }]}>
+        <header><span>Question {question.position ?? index + 1}</span>{question.is_correct === 1 ? <strong>✓ Correct</strong> : question.is_correct === 0 ? <strong>Needs review</strong> : <strong>Awaiting grading</strong>}</header>
+        <h2>{question.prompt}</h2>
+        <dl><div><dt>Your answer</dt><dd>{question.selected_answer ?? question.text_response ?? "No answer"}</dd></div>{data.revealAnswers && question.correct_answer && <div><dt>Correct answer</dt><dd>{question.correct_answer}</dd></div>}</dl>
+        {data.revealAnswers && question.explanation && <p class="result-explanation"><strong>Explanation</strong>{question.explanation}</p>}
+      </article>)}
+    </section>
+  </main>
+</BaseLayout>

@@ -35,6 +35,7 @@ export type LearningProduct = {
   description: string;
   subject: string;
   audience: string;
+  language_code?: string;
   content_url: string | null;
   content_json?: string;
   estimated_minutes: number | null;
@@ -57,6 +58,7 @@ export type LearningProduct = {
   offer_title?: string | null;
   offer_price_cents?: number | null;
   product_offer_id?: string | null;
+  access_order_id?: string | null;
 };
 
 export const learningProductMeta: Record<LearningProductType, {

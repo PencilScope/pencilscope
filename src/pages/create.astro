@@ -5,6 +5,7 @@ import ProductIcon from "@/components/ProductIcon.astro";
 import { requestApi } from "@/lib/api-client";
 import { learningProductMeta, learningProductTypes, type LearningProduct } from "@/lib/learning-products";
 import { productCatalogueKey } from "@/lib/product-catalog";
+import { learningLanguages } from "@/lib/languages";
 
 const userId = await Astro.session?.get("userId");
 if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/create");
@@ -87,6 +88,7 @@ const suggestedDuration = editProduct?.estimated_minutes ?? durationDefaults[sel
             <label>Title<input name="title" required minlength="3" maxlength="140" placeholder="A clear, useful title" value={editProduct?.title ?? ""} /></label>
             <label>Topic<input name="subject" required maxlength="120" placeholder="For example: Leadership" value={suggestedSubject} /><small>Pre-filled from your recent work when available.</small></label>
             <label>For<input name="audience" required maxlength="120" placeholder="For example: New managers" value={suggestedAudience} /><small>Who will benefit most?</small></label>
+            <label>Language<select name="languageCode" required>{learningLanguages.map((language) => <option value={language.code} selected={(editProduct?.language_code ?? "en") === language.code}>{language.label}</option>)}</select></label>
             <label>Length in minutes<input name="estimatedMinutes" type="number" min="1" max="10000" value={suggestedDuration} required /><small>Suggested for this format; change if needed.</small></label>
           </div>
           <label>What learners will gain<textarea name="description" required minlength="20" maxlength="2000" rows="4" placeholder="After this, learners will be able to…">{editProduct?.description ?? ""}</textarea></label>
@@ -231,7 +233,7 @@ const suggestedDuration = editProduct?.estimated_minutes ?? durationDefaults[sel
     const data = new FormData(form!);
     return {
       productType: String(data.get("productType") ?? ""), title: data.get("title"), subject: data.get("subject"),
-      audience: data.get("audience"), estimatedMinutes: Number(data.get("estimatedMinutes")), description: data.get("description"),
+      audience: data.get("audience"), languageCode: data.get("languageCode"), estimatedMinutes: Number(data.get("estimatedMinutes")), description: data.get("description"),
       contentUrl: data.get("contentUrl"), primaryLibraryItemId: form?.dataset.libraryItemId || undefined,
       passingScore: Number(data.get("passingScore")), timeLimitMinutes: Number(data.get("timeLimitMinutes")),
       questions: questionsPayload(), status: "draft", metadataOnly

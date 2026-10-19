@@ -383,6 +383,90 @@ async function myResults(request: Request, env: ApiEnvironment): Promise<Respons
   return json({ courseAttempts: courseAttempts.results, standaloneAttempts: standaloneAttempts.results });
 }
 
+async function myResultDetail(
+  request: Request,
+  env: ApiEnvironment,
+  kind: "course" | "product",
+  attemptId: string
+): Promise<Response> {
+  const actor = await getCreatorActorById(actorId(request), env.DB);
+  if (!actor) return problem(401, "authentication_required", "Sign in to view this result.");
+
+  if (kind === "course") {
+    const attempt = await env.DB.prepare(
+      `SELECT aa.id, aa.status, aa.started_at, aa.submitted_at, aa.graded_at,
+        aa.score, aa.max_score, aa.passed, a.title, a.assessment_type,
+        a.instructions, a.passing_score, a.feedback_mode, a.available_until,
+        c.title AS course_title
+       FROM assessment_attempts aa
+       JOIN assessments a ON a.id = aa.assessment_id
+       JOIN courses c ON c.id = a.course_id
+       WHERE aa.id = ? AND aa.student_user_id = ?`
+    ).bind(attemptId, actor.id).first<Record<string, unknown>>();
+    if (!attempt) return problem(404, "result_not_found", "This result is unavailable.");
+    if (attempt.status === "in_progress") {
+      return problem(409, "result_not_completed", "Complete and submit the assessment before reviewing the result.");
+    }
+    const revealAnswers = attempt.feedback_mode !== "after_close"
+      || attempt.status === "graded"
+      || (typeof attempt.available_until === "string" && attempt.available_until <= new Date().toISOString());
+    const questions = await env.DB.prepare(
+      `SELECT q.id, q.prompt, q.question_type, q.explanation, q.points, q.position,
+        r.text_response, r.awarded_points, r.is_correct,
+        selected.label AS selected_answer,
+        correct.label AS correct_answer
+       FROM assessment_questions q
+       JOIN assessment_attempts aa ON aa.assessment_id = q.assessment_id
+       LEFT JOIN assessment_responses r ON r.attempt_id = aa.id AND r.question_id = q.id
+       LEFT JOIN assessment_options selected ON selected.id = r.selected_option_id
+       LEFT JOIN assessment_options correct ON correct.question_id = q.id AND correct.is_correct = 1
+       WHERE aa.id = ?
+       ORDER BY q.position`
+    ).bind(attemptId).all<Record<string, unknown>>();
+    return json({
+      kind,
+      attempt,
+      revealAnswers,
+      questions: questions.results.map((question) => ({
+        ...question,
+        correct_answer: revealAnswers ? question.correct_answer : null,
+        explanation: revealAnswers ? question.explanation : ""
+      }))
+    });
+  }
+
+  const attempt = await env.DB.prepare(
+    `SELECT lpa.id, lpa.answers_json, lpa.score_percent AS score, lpa.passed,
+      lpa.submitted_at, p.title, p.product_type, p.content_json
+     FROM learning_product_attempts lpa
+     JOIN learning_products p ON p.id = lpa.learning_product_id
+     WHERE lpa.id = ? AND lpa.user_id = ?`
+  ).bind(attemptId, actor.id).first<{
+    id: string; answers_json: string; score: number; passed: number; submitted_at: string;
+    title: string; product_type: string; content_json: string;
+  }>();
+  if (!attempt) return problem(404, "result_not_found", "This result is unavailable.");
+  let answers: number[] = [];
+  let content: { passingScore?: number; questions?: Array<{ prompt?: string; options?: string[]; correctIndex?: number; explanation?: string }> } = {};
+  try { answers = JSON.parse(attempt.answers_json); } catch { answers = []; }
+  try { content = JSON.parse(attempt.content_json); } catch { content = {}; }
+  const questions = Array.isArray(content.questions) ? content.questions.map((question, index) => {
+    const selectedIndex = Number(answers[index]);
+    const correctIndex = Number(question.correctIndex);
+    return {
+      id: `${attempt.id}-${index + 1}`,
+      position: index + 1,
+      prompt: question.prompt ?? `Question ${index + 1}`,
+      selected_answer: question.options?.[selectedIndex] ?? "No answer",
+      correct_answer: question.options?.[correctIndex] ?? "",
+      is_correct: selectedIndex === correctIndex ? 1 : 0,
+      explanation: question.explanation ?? ""
+    };
+  }) : [];
+  const { answers_json: _answers, content_json: _content, ...publicAttempt } = attempt;
+  return json({ kind, attempt: { ...publicAttempt, passing_score: Number(content.passingScore ?? 50) }, revealAnswers: true, questions });
+}
+
 async function creatorOverview(request: Request, env: ApiEnvironment): Promise<Response> {
   const actor = await getCreatorActorById(actorId(request), env.DB);
   if (!actor) return problem(401, "authentication_required", "Sign in to open your Creation Workspace.");
@@ -630,6 +714,10 @@ export async function handleOperationsRequest(
   if (request.method === "GET" && pathname === "/api/payments") return payments(request, env);
   if (request.method === "GET" && pathname === "/api/admin/billing") return billingOperations(request, env);
   if (request.method === "GET" && pathname === "/api/my-results") return myResults(request, env);
+  const resultDetail = pathname.match(/^\/api\/my-results\/(course|product)\/([^/]+)$/);
+  if (request.method === "GET" && resultDetail) {
+    return myResultDetail(request, env, resultDetail[1] as "course" | "product", decodeURIComponent(resultDetail[2]));
+  }
   if (request.method === "GET" && pathname === "/api/creator/overview") return creatorOverview(request, env);
 
   const lifecycle = pathname.match(/^\/api\/tutor\/courses\/([^/]+)\/(delist|relist)$/);

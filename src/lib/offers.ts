@@ -23,6 +23,8 @@ export type MarketplaceOffer = {
   formats: string[];
   topics: string[];
   includedTitles: string[];
+  languages: string[];
+  estimatedMinutes: number;
   updatedAt: string;
 };
 

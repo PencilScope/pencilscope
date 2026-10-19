@@ -4,6 +4,7 @@ import { requestApi } from "@/lib/api-client";
 import { learningProductMeta, type LearningProduct, type LearningProductType } from "@/lib/learning-products";
 import ProductIcon from "@/components/ProductIcon.astro";
 import { courseDeliveryModeForProduct, creatorProductCatalogue, productCatalogueKey } from "@/lib/product-catalog";
+import { learningLanguages } from "@/lib/languages";
 
 const userId = await Astro.session?.get("userId");
 if (typeof userId !== "string") return Astro.redirect("/sign-in");
@@ -37,7 +38,7 @@ const activeSection: StudioSection = studioSections.includes(requestedSection as
   : "overview";
 let studio: {
   course: {
-    id: string; slug: string; title: string; description: string; subject: string; primary_level: string;
+    id: string; slug: string; title: string; description: string; subject: string; primary_level: string; language_code: string;
     delivery_mode: string; price_cents: number; currency: string; status: string; pricing_status: string;
     listing_status: "listed" | "unlisted" | "delisted"; delisted_at: string | null;
     delisted_reason: string | null; member_role: string; content_version: number; source_course_id: string | null;
@@ -291,6 +292,7 @@ const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 
                   <label>Title<input name="title" required minlength="3" value={studio.course.title} /></label>
                   <label>Topic<input name="subject" required value={studio.course.subject} /></label>
                   <label>Audience<input name="primaryLevel" required value={studio.course.primary_level} /></label>
+                  <label>Language<select name="languageCode" required>{learningLanguages.map((language) => <option value={language.code} selected={(studio.course.language_code ?? "en") === language.code}>{language.label}</option>)}</select></label>
                   <label>Primary delivery<select name="deliveryMode">
                     <option value="self-paced" selected={studio.course.delivery_mode === "self-paced"}>Recorded / self-paced</option>
                     <option value="live" selected={studio.course.delivery_mode === "live"}>Live online</option>

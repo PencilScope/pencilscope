@@ -8,6 +8,7 @@ type OfferRow = {
   enrolment_closes_at: string | null; access_ends_at: string | null; capacity: number | null;
   starts_at: string | null; ends_at: string | null; delivery_mode: string; cover_asset_id: string | null;
   item_count: number; course_count: number; formats: string; topics: string; included_titles: string;
+  languages: string; estimated_minutes: number;
   enrolled_count: number; updated_at: string;
 };
 
@@ -46,6 +47,8 @@ const publicOffer = (offer: OfferRow) => ({
   formats: [...new Set(String(offer.formats || "").split(",").filter(Boolean))],
   topics: splitDistinct(offer.topics, "¦"),
   includedTitles: splitDistinct(offer.included_titles, "¦"),
+  languages: splitDistinct(offer.languages, ","),
+  estimatedMinutes: Number(offer.estimated_minutes || 0),
   updatedAt: offer.updated_at
 });
 
@@ -73,6 +76,10 @@ async function offerRows(env: ApiEnvironment): Promise<OfferRow[]> {
          || CASE WHEN EXISTS (SELECT 1 FROM product_offer_course_items ci WHERE ci.product_offer_id = po.id) THEN '¦' || COALESCE((SELECT GROUP_CONCAT(c.subject, '¦') FROM product_offer_course_items ci JOIN courses c ON c.id = ci.course_id WHERE ci.product_offer_id = po.id), '') ELSE '' END, '¦') AS topics,
        TRIM(COALESCE((SELECT GROUP_CONCAT(p.title, '¦') FROM product_offer_items pi JOIN learning_products p ON p.id = pi.learning_product_id WHERE pi.product_offer_id = po.id), '')
          || CASE WHEN EXISTS (SELECT 1 FROM product_offer_course_items ci WHERE ci.product_offer_id = po.id) THEN '¦' || COALESCE((SELECT GROUP_CONCAT(c.title, '¦') FROM product_offer_course_items ci JOIN courses c ON c.id = ci.course_id WHERE ci.product_offer_id = po.id), '') ELSE '' END, '¦') AS included_titles,
+       TRIM(COALESCE((SELECT GROUP_CONCAT(DISTINCT p.language_code) FROM product_offer_items pi JOIN learning_products p ON p.id = pi.learning_product_id WHERE pi.product_offer_id = po.id), '')
+         || CASE WHEN EXISTS (SELECT 1 FROM product_offer_course_items ci WHERE ci.product_offer_id = po.id) THEN ',' || COALESCE((SELECT GROUP_CONCAT(DISTINCT c.language_code) FROM product_offer_course_items ci JOIN courses c ON c.id = ci.course_id WHERE ci.product_offer_id = po.id), '') ELSE '' END, ',') AS languages,
+       COALESCE((SELECT SUM(COALESCE(p.estimated_minutes, 0)) FROM product_offer_items pi JOIN learning_products p ON p.id = pi.learning_product_id WHERE pi.product_offer_id = po.id), 0)
+         + COALESCE((SELECT SUM(COALESCE(l.estimated_minutes, 0)) FROM product_offer_course_items ci JOIN course_modules m ON m.course_id = ci.course_id JOIN lessons l ON l.module_id = m.id WHERE ci.product_offer_id = po.id), 0) AS estimated_minutes,
        (SELECT COUNT(*) FROM enrolment_offerings eo WHERE eo.course_offering_id = po.commerce_offering_id AND eo.status IN ('active', 'completed')) AS enrolled_count,
        po.updated_at
      FROM product_offers po JOIN users u ON u.id = po.creator_user_id
@@ -93,6 +100,9 @@ async function offerRows(env: ApiEnvironment): Promise<OfferRow[]> {
        'course' || COALESCE((SELECT ',' || GROUP_CONCAT(p.product_type) FROM course_offering_learning_products olp JOIN learning_products p ON p.id = olp.learning_product_id WHERE olp.course_offering_id = co.id), '') AS formats,
        c.subject || COALESCE((SELECT '¦' || GROUP_CONCAT(cc.title, '¦') FROM course_category_links ccl JOIN course_categories cc ON cc.id = ccl.category_id WHERE ccl.course_id = c.id AND cc.active = 1), '') AS topics,
        c.title || COALESCE((SELECT '¦' || GROUP_CONCAT(p.title, '¦') FROM course_offering_learning_products olp JOIN learning_products p ON p.id = olp.learning_product_id WHERE olp.course_offering_id = co.id), '') AS included_titles,
+       c.language_code || COALESCE((SELECT ',' || GROUP_CONCAT(DISTINCT p.language_code) FROM course_offering_learning_products olp JOIN learning_products p ON p.id = olp.learning_product_id WHERE olp.course_offering_id = co.id), '') AS languages,
+       COALESCE((SELECT SUM(COALESCE(l.estimated_minutes, 0)) FROM course_modules m JOIN lessons l ON l.module_id = m.id WHERE m.course_id = c.id), 0)
+         + COALESCE((SELECT SUM(COALESCE(p.estimated_minutes, 0)) FROM course_offering_learning_products olp JOIN learning_products p ON p.id = olp.learning_product_id WHERE olp.course_offering_id = co.id), 0) AS estimated_minutes,
        (SELECT COUNT(*) FROM enrolment_offerings eo WHERE eo.course_offering_id = co.id AND eo.status IN ('active', 'completed')) AS enrolled_count,
        co.updated_at
      FROM course_offerings co JOIN courses c ON c.id = co.course_id JOIN users u ON u.id = c.tutor_id

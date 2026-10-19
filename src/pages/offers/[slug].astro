@@ -4,6 +4,7 @@ import ProductIcon from "@/components/ProductIcon.astro";
 import { findPublishedOffer } from "@/lib/api-client";
 import { offerAvailabilityLabel, offerPrice } from "@/lib/offers";
 import type { ProductIconName } from "@/lib/product-catalog";
+import { languageLabel } from "@/lib/languages";
 
 const slug = Astro.params.slug ?? "";
 const result = await findPublishedOffer(slug);
@@ -17,13 +18,14 @@ const checkoutError = Astro.url.searchParams.get("error");
 const canBook = offer.availability === "available";
 const signInHref = `/sign-in?next=${encodeURIComponent(`/offers/${offer.slug}`)}`;
 const iconFor = (type: string): ProductIconName => (["course", "online_course", "in_person_course", "video_course", "audio_book", "ebook", "quiz", "test", "mock_exam", "reading"] as string[]).includes(type) ? type as ProductIconName : "course";
+const duration = offer.estimatedMinutes > 0 ? `${offer.estimatedMinutes} minutes estimated` : "Flexible duration";
 ---
 
 <BaseLayout title={`${offer.title} — PencilScope`} description={offer.description}>
   <main class="shell offer-detail-page">
     <nav class="creator-breadcrumb" aria-label="Breadcrumb"><a href="/offers">Explore learning</a><span aria-hidden="true">›</span><strong>{offer.title}</strong></nav>
     <section class="offer-detail-hero">
-      <div class="offer-detail-copy"><span class="eyebrow">{offer.offerKind === "bundle" ? "Bundle" : offer.offerKind === "course" ? "Course" : "Single resource"}</span><h1>{offer.title}</h1><p>{offer.description}</p><div class="offer-includes">{offer.formats.map((format) => <span>{format.replaceAll("_", " ")}</span>)}</div><p class="offer-byline">Created by <strong>{offer.creatorName}</strong></p></div>
+      <div class="offer-detail-copy"><span class="eyebrow">{offer.offerKind === "bundle" ? "Bundle" : offer.offerKind === "course" ? "Course" : "Single resource"}</span><h1>{offer.title}</h1><p>{offer.description}</p><div class="offer-includes">{offer.formats.map((format) => <span>{format.replaceAll("_", " ")}</span>)}</div><div class="offer-detail-facts"><span><small>Language</small><strong>{offer.languages.map(languageLabel).join(" + ") || "English"}</strong></span><span><small>Duration</small><strong>{duration}</strong></span></div><p class="offer-byline">Created by <strong>{offer.creatorName}</strong></p></div>
       <aside class="panel offer-booking-card"><span class:list={["offer-availability", `availability-${offer.availability}`]}>{offerAvailabilityLabel[offer.availability]}</span><strong class="offer-detail-price">{offerPrice(offer)}</strong><p>{offer.itemCount} included product{offer.itemCount === 1 ? "" : "s"}{offer.startsAt ? ` · starts ${new Date(offer.startsAt).toLocaleDateString("en-SG")}` : " · start anytime"}</p>{checkoutError && <p class="form-error">{checkoutError}</p>}{checkoutSuccess && <div class="checkout-confirmation checkout-pending" data-checkout-session={checkoutSessionId}><span class="checkout-spinner" aria-hidden="true"></span><div><strong>Payment received</strong><p data-checkout-message>Adding every included product to My Learning…</p></div></div>}{!checkoutSuccess && canBook && signedIn && <form class="checkout-form" action="/api/checkout" method="post">{offer.slug.startsWith("product-") ? <input type="hidden" name="productOfferId" value={offer.id} /> : <><input type="hidden" name="courseId" value={offer.courseId ?? ""} /><input type="hidden" name="offeringId" value={offer.id} /><input type="hidden" name="studentId" value={String(userId)} /></>}<input type="hidden" name="returnTo" value={`/offers/${offer.slug}`} /><button class="button button-full" type="submit">Continue to secure checkout</button></form>}{!checkoutSuccess && canBook && !signedIn && <a class="button button-full" href={signInHref}>Sign in to enrol</a>}{!checkoutSuccess && !canBook && <button class="button button-full" disabled>{offerAvailabilityLabel[offer.availability]}</button>}<small>Secure checkout powered by Stripe</small></aside>
     </section>
     <section class="offer-detail-includes"><div class="landing-section-heading"><div><span class="eyebrow">What’s included</span><h2>Everything you will receive.</h2></div><p>One enrolment unlocks every item listed below.</p></div><div class="offer-item-list">{items.map((item, index) => <article><ProductIcon name={iconFor(item.productType)} /><div><span class="eyebrow">{index + 1} · {item.productType.replaceAll("_", " ")}</span><h3>{item.title}</h3><p>{item.description}</p>{item.offeringTitle && <small>{item.offeringTitle}{item.startsAt ? ` · ${new Date(item.startsAt).toLocaleDateString("en-SG")}` : ""}</small>}</div></article>)}</div></section>
@@ -40,7 +42,7 @@ const iconFor = (type: string): ProductIconName => (["course", "online_course", 
       attempts += 1;
       try {
         const response = await fetch(`/api/checkout/status?sessionId=${encodeURIComponent(checkoutSession)}`, { headers: { accept: "application/json" } });
-        const result = await response.json() as { status?: string; courseId?: string; courseSlug?: string; courseTitle?: string; productCount?: number };
+        const result = await response.json() as { status?: string; orderId?: string; courseId?: string; courseSlug?: string; courseTitle?: string; productCount?: number };
         if (response.ok && result.status === "confirmed" && result.courseId) {
           confirmation.classList.remove("checkout-pending");
           confirmation.classList.add("checkout-confirmed");
@@ -48,7 +50,7 @@ const iconFor = (type: string): ProductIconName => (["course", "online_course", 
             ? `${result.courseTitle ?? "Your course"} and ${result.productCount} included product${result.productCount === 1 ? "" : "s"} are ready in My Learning.`
             : `${result.courseTitle ?? "Your course"} is ready in My Learning.`;
           setTimeout(() => {
-            window.location.href = `/dashboard?workspace=learning&section=learning&enrolledCourse=${encodeURIComponent(result.courseId ?? "")}&enrolledSlug=${encodeURIComponent(result.courseSlug ?? "")}`;
+            window.location.href = `/dashboard?workspace=learning&section=learning&purchase=${encodeURIComponent(result.orderId ?? "")}`;
           }, 1800);
           return;
         }

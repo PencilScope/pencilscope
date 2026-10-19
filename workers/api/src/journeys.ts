@@ -645,7 +645,7 @@ async function dashboard(request: Request, env: ApiEnvironment): Promise<Respons
   if (studentIds.length) {
     const placeholders = studentIds.map(() => "?").join(",");
     enrolments = (await env.DB.prepare(
-      `SELECT e.id, e.student_user_id, e.course_id, eo.status, eo.enrolled_at,
+      `SELECT e.id, e.student_user_id, e.course_id, eo.status, eo.enrolled_at, eo.order_id,
         eo.course_offering_id, o.title AS offering_title,
         t.academic_year, t.term_number, c.title, c.slug, c.subject,
         COALESCE(AVG(pr.progress_percent), 0) AS progress_percent
@@ -655,6 +655,7 @@ async function dashboard(request: Request, env: ApiEnvironment): Promise<Respons
        JOIN academic_terms t ON t.id = o.academic_term_id
        LEFT JOIN progress_records pr ON pr.enrolment_id = e.id
        WHERE e.student_user_id IN (${placeholders})
+         AND NOT EXISTS (SELECT 1 FROM product_offers po WHERE po.commerce_course_id = e.course_id)
        GROUP BY eo.id ORDER BY eo.enrolled_at DESC`
     ).bind(...studentIds).all()).results;
   }
@@ -1321,13 +1322,13 @@ async function tutorAuthoring(
     const statements = [
       env.DB.prepare(
         `INSERT INTO courses
-          (id, tutor_id, slug, title, description, subject, primary_level, delivery_mode,
+          (id, tutor_id, slug, title, description, subject, primary_level, language_code, delivery_mode,
            price_cents, creator_price_cents, currency, accent, status, pricing_status, pricing_version,
            listing_status, created_at, updated_at, source_course_id, content_version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'pending', 1, 'unlisted', ?, ?, ?, ?)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'pending', 1, 'unlisted', ?, ?, ?, ?)`
       ).bind(
         courseId, source.tutor_id, slug, source.title, source.description, source.subject,
-        source.primary_level, source.delivery_mode, source.price_cents,
+        source.primary_level, source.language_code ?? "en", source.delivery_mode, source.price_cents,
         source.creator_price_cents ?? source.price_cents, source.currency,
         source.accent ?? null, now, now, rootId, version
       ),
@@ -1572,6 +1573,8 @@ async function tutorAuthoring(
     const description = text(input?.description, 20, 5000);
     const subject = text(input?.subject, 1, 120);
     const primaryLevel = text(input?.primaryLevel, 1, 120);
+    const languageCode = /^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(String(input?.languageCode ?? ""))
+      ? String(input?.languageCode) : "en";
     const deliveryMode = ["self-paced", "live", "hybrid", "ai-supported"].includes(String(input?.deliveryMode))
       ? String(input?.deliveryMode) : null;
     if (!title || !description || !subject || !primaryLevel || !deliveryMode) {
@@ -1580,9 +1583,9 @@ async function tutorAuthoring(
     const now = new Date().toISOString();
     await env.DB.batch([
       env.DB.prepare(
-        `UPDATE courses SET title = ?, description = ?, subject = ?, primary_level = ?,
+        `UPDATE courses SET title = ?, description = ?, subject = ?, primary_level = ?, language_code = ?,
           delivery_mode = ?, updated_at = ? WHERE id = ?`
-      ).bind(title, description, subject, primaryLevel, deliveryMode, now, courseId),
+      ).bind(title, description, subject, primaryLevel, languageCode, deliveryMode, now, courseId),
       env.DB.prepare(
         `INSERT INTO audit_logs
           (id, actor_user_id, action, entity_type, entity_id, metadata_json, created_at)
