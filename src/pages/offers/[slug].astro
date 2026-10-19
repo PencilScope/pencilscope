@@ -40,11 +40,21 @@ const iconFor = (type: string): ProductIconName => (["course", "online_course", 
       attempts += 1;
       try {
         const response = await fetch(`/api/checkout/status?sessionId=${encodeURIComponent(checkoutSession)}`, { headers: { accept: "application/json" } });
-        const result = await response.json() as { ready?: boolean };
-        if (response.ok && result.ready) { confirmation.classList.remove("checkout-pending"); confirmation.classList.add("checkout-confirmed"); if (message) message.textContent = "Your products are ready in My Learning."; setTimeout(() => { window.location.href = "/dashboard?workspace=learning&section=learning"; }, 900); return; }
+        const result = await response.json() as { status?: string; courseId?: string; courseSlug?: string; courseTitle?: string; productCount?: number };
+        if (response.ok && result.status === "confirmed" && result.courseId) {
+          confirmation.classList.remove("checkout-pending");
+          confirmation.classList.add("checkout-confirmed");
+          if (message) message.textContent = result.productCount
+            ? `${result.courseTitle ?? "Your course"} and ${result.productCount} included product${result.productCount === 1 ? "" : "s"} are ready in My Learning.`
+            : `${result.courseTitle ?? "Your course"} is ready in My Learning.`;
+          setTimeout(() => {
+            window.location.href = `/dashboard?workspace=learning&section=learning&enrolledCourse=${encodeURIComponent(result.courseId ?? "")}&enrolledSlug=${encodeURIComponent(result.courseSlug ?? "")}`;
+          }, 1800);
+          return;
+        }
       } catch {}
       if (attempts < 15) setTimeout(check, 1000);
-      else if (message) message.textContent = "Your payment is confirmed. My Learning will update shortly.";
+      else if (message) message.innerHTML = `Your payment is confirmed, but access is taking longer than expected. <a href="/dashboard?workspace=learning&section=learning">Check My Learning</a> or refresh this page.`;
     };
     check();
   }

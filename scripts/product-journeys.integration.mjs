@@ -402,10 +402,14 @@ try {
   await run([
     "d1", "execute", "DB", "--local", "--persist-to", state, "--config", config,
     "--command",
-    `${entitlementSql}INSERT INTO enrolments (id,course_id,student_user_id,status,enrolled_at) VALUES ('journey-enrolment','course-maths-5','journey-learner','active',datetime('now'));INSERT INTO enrolment_offerings (id,enrolment_id,course_offering_id,student_user_id,status,enrolled_at) VALUES ('journey-enrolment-offering','journey-enrolment','offering-course-maths-5','journey-learner','active',datetime('now'));`
+    `${entitlementSql}INSERT INTO enrolments (id,order_id,course_id,student_user_id,status,enrolled_at) VALUES ('journey-enrolment','journey-payout-order','course-maths-5','journey-learner','active',datetime('now'));INSERT INTO enrolment_offerings (id,order_id,enrolment_id,course_offering_id,student_user_id,status,enrolled_at) VALUES ('journey-enrolment-offering','journey-payout-order','journey-enrolment','offering-course-maths-5','journey-learner','active',datetime('now'));`
   ]);
 
   worker = await startWorker();
+  const checkoutConfirmation = await json(await api("/api/checkout/status?sessionId=cs_journey_payout", { headers: learnerHeaders }));
+  assert.equal(checkoutConfirmation.status, "confirmed");
+  assert.equal(checkoutConfirmation.courseId, "course-maths-5");
+  assert.equal(checkoutConfirmation.offeringId, "offering-course-maths-5");
   const myLearning = await json(await api("/api/my-learning-products", { headers: learnerHeaders }));
   assert.equal(myLearning.products.length, publishedProducts.length);
   for (const product of publishedProducts) {

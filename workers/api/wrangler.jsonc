@@ -130,7 +130,7 @@
 				"crons": ["17 3 * * *"]
 			},
 			"vars": {
-				"APP_URL": "https://pencilscope-production.rdproducts-adm1.workers.dev",
+				"APP_URL": "https://pencilscope.com",
 				"ENVIRONMENT": "production",
 				"ENABLE_AUTOMATIC_TRANSFERS": "false",
 				"PLATFORM_FEE_BPS": "1000",
