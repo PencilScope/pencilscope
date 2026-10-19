@@ -9,7 +9,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profile = resolve(root, `.chrome-browser-e2e-${process.pid}`);
 const chrome = "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe";
 const debugOrigin = "http://127.0.0.1:9225";
-const site = "http://127.0.0.1:4321";
+const site = process.env.BROWSER_SITE ?? "http://127.0.0.1:4321";
+const billingSite = process.env.BROWSER_BILLING_SITE ?? "http://127.0.0.1:8788";
+const adminSite = process.env.BROWSER_ADMIN_SITE ?? "http://127.0.0.1:8789";
 const delay = (ms) => new Promise((done) => setTimeout(done, ms));
 const issues = [];
 if (!profile.startsWith(root + "\\") && !profile.startsWith(root + "/")) {
@@ -65,7 +67,7 @@ const evaluate = async (expression) => {
   return result.result.value;
 };
 const waitUntil = async (expression, label) => {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     if (await evaluate(expression)) return;
     await delay(100);
   }
@@ -117,12 +119,29 @@ try {
   }
   assert.match(home.text, /experts|experience/i);
   assert.ok(await evaluate("Boolean(document.querySelector('a[href^=\"/sign-in\"]'))"));
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-contact-open]'))"), "landing page is missing the contact assistant");
+  await evaluate("document.querySelector('[data-contact-open]').click()");
+  assert.ok(await evaluate("document.querySelector('[data-contact-dialog]').open"), "contact assistant did not open");
+  assert.equal(await evaluate("document.querySelector('.cf-turnstile')?.dataset.action"), "contact");
+  assert.equal(await evaluate("document.querySelectorAll('[data-contact-step]').length"), 3);
   await navigate(site + "/sign-in");
   await assertHealthyPage("sign-in page");
   assert.equal(await evaluate("document.querySelector('.cf-turnstile')?.dataset.action"), "login");
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-contact-open]'))"), false);
   await navigate(site + "/register");
   await assertHealthyPage("registration page");
   assert.equal(await evaluate("document.querySelector('.cf-turnstile')?.dataset.action"), "register");
+  for (const route of ["/offers", "/courses", "/library"]) {
+    await navigate(site + route);
+    const marketplace = await assertHealthyPage("public marketplace " + route);
+    assert.match(marketplace.text, /offer|learning/i, route + " is missing offer-first marketplace content");
+    assert.equal(await evaluate("[...document.querySelectorAll('.offer-card-link')].every((link)=>link.getAttribute('href')?.startsWith('/offers/'))"), true, route + " contains a product-first enrolment card");
+  }
+  await navigate(site + "/offers");
+  assert.ok(await evaluate("[...document.querySelectorAll('.catalogue-filter-groups strong')].some((item)=>item.textContent.trim()==='Learning type')"), "Catalogue must separate learning type from category");
+  assert.ok(await evaluate("[...document.querySelectorAll('.catalogue-filters a')].some((item)=>item.textContent.includes('Single resources'))"), "Catalogue is missing the learner-friendly single-resource type");
+  assert.equal(await evaluate("document.querySelector('#offer-search')?.getAttribute('placeholder')"), "Search by topic, skill, format or expert…");
+  assert.ok(await evaluate("Boolean(document.querySelector('[name=\"topic\"]')) && Boolean(document.querySelector('[name=\"delivery\"]')) && Boolean(document.querySelector('[name=\"availability\"]')) && Boolean(document.querySelector('[name=\"sort\"]'))"), "Catalogue is missing refinement controls");
 
   if (process.env.BROWSER_LANDING_ONLY !== "1") {
   await login("browser-learner-20261014@example.com", "BrowserTest!2026");
@@ -145,6 +164,19 @@ try {
   await navigate(site + "/dashboard?workspace=creation&section=content");
   assert.equal(await evaluate("[...document.querySelectorAll('summary')].filter((item)=>item.textContent.includes('+ Create product')).length"), 1, "Creator Studio must show one Create product control");
   assert.ok(await evaluate("Boolean(document.querySelector('[data-ai-creator]'))"), "Creator Studio is missing Connect and create with AI");
+  const productDashboardHref = await evaluate("document.querySelector('.content-title-link[href*=\"section=product\"]')?.href || ''");
+  assert.ok(productDashboardHref, "Creator Studio product list is missing a product dashboard link");
+  await navigate(productDashboardHref);
+  assert.ok(await evaluate("[...document.querySelectorAll('.dashboard-context-nav a')].some((link)=>link.textContent.includes('Pricing & Publish'))"), "Selected product left menu is missing Pricing & Publish");
+  assert.ok(await evaluate("[...document.querySelectorAll('.dashboard-context-nav a')].some((link)=>link.textContent.includes('Settings'))"), "Selected product left menu is missing Settings");
+  assert.equal(await evaluate("document.querySelectorAll('.product-dashboard-tabs').length"), 0, "Selected product still shows duplicate top tabs");
+  await navigate(site + "/dashboard?workspace=creation&section=content");
+  const standalonePricingHref = await evaluate("document.querySelector('.content-manager-item:not([data-content-type=\"course\"]) .content-title-link')?.href || ''");
+  assert.ok(standalonePricingHref, "Creator Studio needs a standalone product for pricing journey coverage");
+  await navigate(standalonePricingHref + "&tab=offers");
+  assert.equal(await evaluate("document.querySelectorAll('.offer-stepper li').length"), 4, "Pricing & Publish must show four guided steps");
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-offer-step-panel=\"1\"]:not([hidden])'))"), "Pricing & Publish must begin with product selection");
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-offer-action=\"draft\"]')) && Boolean(document.querySelector('[data-offer-action=\"publish\"]'))"), "Pricing & Publish is missing draft and publish choices");
   await navigate(site + "/dashboard?workspace=creation&section=overview");
   assert.ok(await evaluate("Boolean(document.querySelector('a[href*=\"status=published\"]'))"), "creator overview is missing published drill-down");
   assert.ok(await evaluate("Boolean(document.querySelector('a[href*=\"booked=yes\"]'))"), "creator overview is missing products-with-bookings drill-down");
@@ -153,13 +185,39 @@ try {
     const page = await assertHealthyPage("creator " + route);
     assert.ok(!page.href.includes("/sign-in"), "creator was signed out at " + route);
   }
+  await navigate(site + "/dashboard?workspace=creation&section=course-studio");
+  assert.ok(await evaluate("Boolean(document.querySelector('#price-enrolment [name=\"priceSGD\"]'))"), "Inline Course Studio is missing creator tuition");
+  assert.ok(await evaluate("Boolean(document.querySelector('#price-enrolment [name=\"enrolmentOpensAt\"]'))"), "Inline Course Studio is missing bookings-open date");
+  assert.ok(await evaluate("[...document.querySelectorAll('.inline-course-studio>.dashboard-section-heading a')].some((link)=>link.href.includes('section=offerings'))"), "Full-screen pricing link does not open Price & enrolment");
+  assert.ok(await evaluate("[...document.querySelectorAll('.inline-course-studio>.dashboard-section-heading a')].some((link)=>link.href.includes('/tutor'))"), "Inline Creator Studio is missing the full-screen workspace action");
+  assert.match(await bodyText(), /Learner price calculation/i);
   await navigate(site + "/tutor");
+  assert.match(await bodyText(), /Create what you know\. Empower others\./i);
+  assert.ok(await evaluate("Boolean(document.querySelector('.creator-breadcrumb'))"), "Creator Studio is missing the Creator Hub breadcrumb");
+  assert.ok(await evaluate("Boolean(document.querySelector('.studio-product-list'))"), "Creator Studio is missing the My Products list");
+  const courseStudioHref = await evaluate("document.querySelector('.studio-product-list a[href*=\"courseId=\"]')?.href || ''");
+  assert.ok(courseStudioHref, "My Products does not include a course workspace link");
+  await navigate(courseStudioHref);
+  assert.ok(await evaluate("Boolean(document.querySelector('.course-editor-topbar'))"), "Course Studio is missing the standardized product header");
+  assert.equal(await evaluate("document.querySelectorAll('.course-editor-progress a').length"), 5, "Course Studio must show five creation stages");
+  assert.ok(await evaluate("Boolean(document.querySelector('.course-editor-identity .studio-status'))"), "Course Studio header is missing product status");
+  assert.ok(await evaluate("Boolean(document.querySelector('.studio-products-back'))"), "Selected course is missing the My Products return action");
+  assert.ok(await evaluate("Boolean(document.querySelector('.studio-bottom-actions'))"), "Selected course is missing standardized bottom actions");
+  assert.ok(await evaluate("Boolean(document.querySelector('button[data-next-section=\"curriculum\"]'))"), "Course details are missing Save draft and continue");
   assert.ok(await evaluate("Boolean(document.querySelector('[name=\"enrolmentOpensAt\"]'))"), "Course Studio is missing bookings-open date");
   assert.ok(await evaluate("Boolean(document.querySelector('[name=\"enrolmentClosesAt\"]'))"), "Course Studio is missing bookings-close date");
   assert.ok(await evaluate("Boolean(document.querySelector('[name=\"accessEndsAt\"]'))"), "Course Studio is missing access-end date");
   await navigate(site + "/create");
   assert.match(await bodyText(), /Connect and create with AI/i);
-  assert.match(await bodyText(), /step|choose|connect/i);
+  assert.equal(await evaluate("document.querySelectorAll('[data-step-item]').length"), 4, "Product creation must show four guided steps");
+  assert.equal(await evaluate("document.querySelectorAll('input[name=\"productType\"]').length"), 7, "Product creation must offer all seven standalone formats");
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-step-panel=\"1\"]:not([hidden])'))"), "Product creation must begin at the format step");
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-pricing-next]'))"), "Product creation is missing the separate pricing continuation");
+  assert.equal(await evaluate("document.querySelectorAll('.product-step-panel input[name=\"priceDollars\"]').length"), 0, "Product creation must not include pricing");
+  assert.equal(await evaluate("[...document.querySelectorAll('button')].filter((button)=>button.textContent.includes('Publish now')).length"), 0, "Product creation must not require direct publication");
+  await evaluate("document.querySelector('[data-step-next]').click()");
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-step-panel=\"2\"]:not([hidden])'))"), "Product creation cannot continue to details");
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-save-exit]'))"), "Product stepper is missing Save and exit");
   await navigate(site + "/content-library");
   assert.match(await bodyText(), /5 GB|storage/i);
   await navigate(site + "/payments");
@@ -167,7 +225,7 @@ try {
 
   await command("Network.clearBrowserCookies");
   await command("Network.setExtraHTTPHeaders", { headers: { "x-pencilscope-admin-email": "finance@e2e.invalid" } });
-  await navigate("http://127.0.0.1:8788/");
+  await navigate(billingSite + "/");
   assert.match(await bodyText(), /PencilScope · Billing/i);
   for (const view of ["overview", "orders", "subscriptions", "settlements", "disputes", "meeting-usage"]) {
     await evaluate("document.querySelector('[data-view=\"" + view + "\"]').click()");
@@ -179,7 +237,7 @@ try {
   }
 
   await command("Network.setExtraHTTPHeaders", { headers: { "x-pencilscope-admin-email": "system-admin@e2e.invalid" } });
-  await navigate("http://127.0.0.1:8789/");
+  await navigate(adminSite + "/");
   assert.match(await bodyText(), /System administration/i);
   for (const view of ["overview", "users", "notifications", "courses", "orders", "settlements", "disputes", "sessions", "audit", "health"]) {
     await evaluate("document.querySelector('[data-view=\"" + view + "\"]').click()");
@@ -197,7 +255,7 @@ try {
     throw new Error("Browser journey defects:\n- " + issues.join("\n- "));
   }
   process.stdout.write(process.env.BROWSER_LANDING_ONLY === "1"
-    ? "Browser public pages passed: landing, sign-in and registration render with Turnstile protection.\n"
+    ? "Browser public pages passed: landing contact assistant, sign-in and registration render with Turnstile protection.\n"
     : "Browser journeys passed: public landing, learner sign-in and protected pages, creator tools, billing dashboard tabs, and system-admin dashboards.\n");
 } finally {
   try { socket.close(); } catch {}

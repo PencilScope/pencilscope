@@ -38,6 +38,20 @@ const run = async (args) => {
   if (code !== 0) throw new Error(output || `Command failed with exit code ${code}`);
   return output;
 };
+const runLocalMigrations = async () => {
+  const args = ["d1", "migrations", "apply", "DB", "--local", "--persist-to", state, "--config", config];
+  let lastError;
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    try {
+      return await run(args);
+    } catch (error) {
+      lastError = error;
+      if (!/internal error|SQLITE_IOERR|runtime failed to start/i.test(String(error?.message ?? error)) || attempt === 10) throw error;
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 400));
+    }
+  }
+  throw lastError;
+};
 const json = async (response, expectedStatus) => {
   const payload = await response.json().catch(() => ({}));
   if (expectedStatus !== undefined) assert.equal(response.status, expectedStatus, JSON.stringify(payload));
@@ -86,7 +100,7 @@ const stopWorker = async (worker) => {
     const killer = spawn("taskkill.exe", ["/pid", String(worker.pid), "/t", "/f"], {
       stdio: ["ignore", "ignore", "ignore"]
     });
-    await once(killer, "exit");
+    await Promise.race([once(killer, "exit"), new Promise((resolveDelay) => setTimeout(resolveDelay, 10_000))]);
   } else {
     worker.kill("SIGTERM");
   }
@@ -96,11 +110,11 @@ const stopWorker = async (worker) => {
 };
 
 await removeState();
-await run(["d1", "migrations", "apply", "DB", "--local", "--persist-to", state, "--config", config]);
+await runLocalMigrations();
 await run([
   "d1", "execute", "DB", "--local", "--persist-to", state, "--config", config,
   "--command",
-  "INSERT INTO users (id,email,display_name,role,status,created_at,updated_at) VALUES ('journey-learner','journey@example.invalid','Journey Learner','student','active',datetime('now'),datetime('now'));INSERT OR REPLACE INTO platform_roles (user_id,role,granted_by,granted_at,revoked_at) VALUES ('tutor-tan','finance','tutor-tan',datetime('now'),NULL);INSERT INTO orders (id,student_user_id,course_id,course_offering_id,stripe_checkout_session_id,stripe_payment_intent_id,amount_cents,currency,status,created_at,updated_at) VALUES ('journey-payout-order','journey-learner','course-maths-5','offering-course-maths-5','cs_journey_payout','pi_journey_payout',10000,'SGD','paid',datetime('now','-8 days'),datetime('now','-8 days'));INSERT INTO creator_earnings (id,order_id,course_id,course_offering_id,creator_user_id,currency,gross_cents,platform_fee_cents,payable_cents,status,created_at,updated_at) VALUES ('journey-payout-earning','journey-payout-order','course-maths-5','offering-course-maths-5','tutor-tan','SGD',10000,1050,8950,'pending_course',datetime('now','-8 days'),datetime('now','-8 days'));INSERT INTO payment_transactions (id,order_id,provider,provider_transaction_id,transaction_type,amount_cents,currency,status,metadata_json,occurred_at,created_at) VALUES ('journey-payment-transaction','journey-payout-order','stripe','pi_journey_payout','payment',10000,'SGD','paid','{}',datetime('now','-8 days'),datetime('now','-8 days'));INSERT INTO payment_lifecycle_events (id,order_id,event_type,status,title,detail,provider_event_id,metadata_json,occurred_at,created_at) VALUES ('journey-payment-confirmed','journey-payout-order','payment_confirmed','paid','Payment confirmed','Your payment was received securely.','pi_journey_payout','{}',datetime('now','-8 days'),datetime('now','-8 days'));"
+  "UPDATE courses SET status='published',listing_status='listed' WHERE id='course-maths-5';UPDATE course_offerings SET status='published',pricing_status='ready',stripe_price_id='price_journey_course' WHERE id='offering-course-maths-5';INSERT INTO users (id,email,display_name,role,status,created_at,updated_at) VALUES ('journey-learner','journey@example.invalid','Journey Learner','student','active',datetime('now'),datetime('now'));INSERT OR REPLACE INTO platform_roles (user_id,role,granted_by,granted_at,revoked_at) VALUES ('tutor-tan','finance','tutor-tan',datetime('now'),NULL);INSERT INTO orders (id,student_user_id,course_id,course_offering_id,stripe_checkout_session_id,stripe_payment_intent_id,amount_cents,currency,status,created_at,updated_at) VALUES ('journey-payout-order','journey-learner','course-maths-5','offering-course-maths-5','cs_journey_payout','pi_journey_payout',10000,'SGD','paid',datetime('now','-8 days'),datetime('now','-8 days'));INSERT INTO creator_earnings (id,order_id,course_id,course_offering_id,creator_user_id,currency,gross_cents,platform_fee_cents,payable_cents,status,created_at,updated_at) VALUES ('journey-payout-earning','journey-payout-order','course-maths-5','offering-course-maths-5','tutor-tan','SGD',10000,1050,8950,'pending_course',datetime('now','-8 days'),datetime('now','-8 days'));INSERT INTO payment_transactions (id,order_id,provider,provider_transaction_id,transaction_type,amount_cents,currency,status,metadata_json,occurred_at,created_at) VALUES ('journey-payment-transaction','journey-payout-order','stripe','pi_journey_payout','payment',10000,'SGD','paid','{}',datetime('now','-8 days'),datetime('now','-8 days'));INSERT INTO payment_lifecycle_events (id,order_id,event_type,status,title,detail,provider_event_id,metadata_json,occurred_at,created_at) VALUES ('journey-payment-confirmed','journey-payout-order','payment_confirmed','paid','Payment confirmed','Your payment was received securely.','pi_journey_payout','{}',datetime('now','-8 days'),datetime('now','-8 days'));"
 ]);
 
 let worker;
@@ -130,6 +144,8 @@ try {
   const publicCourses = await json(await api("/api/courses", { headers: {} }));
   assert.ok(Array.isArray(publicCourses.courses), "The public course catalogue should return a course list");
 
+  let unpricedCourseId = "";
+  let inPersonCourseId = "";
   const courseMatrix = [
     { key: "online_course", deliveryMode: "live" },
     { key: "in_person_course", deliveryMode: "hybrid" },
@@ -145,15 +161,17 @@ try {
         subject: "Journey testing",
         primaryLevel: "All learners",
         deliveryMode: entry.deliveryMode,
-        priceCents: 2500,
         currency: "SGD",
         publish: false,
         categorySlugs: []
       }
     }), 201);
     assert.equal(created.course.status, "draft");
+    if (!unpricedCourseId) unpricedCourseId = created.course.id;
+    if (entry.key === "in_person_course") inPersonCourseId = created.course.id;
     const studio = await json(await api(`/api/tutor/courses/${encodeURIComponent(created.course.id)}/studio`));
     assert.equal(studio.course.delivery_mode, entry.deliveryMode);
+    assert.equal(studio.course.price_cents, 0);
     const edited = await json(await api(`/api/tutor/courses/${encodeURIComponent(created.course.id)}`, {
       method: "PATCH",
       body: {
@@ -167,17 +185,82 @@ try {
     assert.equal(edited.course.title, `${title} edited`);
   }
 
+  const scheduledOffering = await json(await api(`/api/tutor/courses/${encodeURIComponent(inPersonCourseId)}/offerings`, {
+    method: "POST",
+    body: {
+      title: "Singapore weekend cohort", offeringType: "cohort", deliveryMode: "in_person",
+      priceCents: 5000, startsAt: "2027-02-06T01:00:00.000Z", endsAt: "2027-02-07T09:00:00.000Z",
+      enrolmentOpensAt: "2026-12-01T00:00:00.000Z", enrolmentClosesAt: "2027-02-05T12:00:00.000Z",
+      accessEndsAt: "2027-03-07T09:00:00.000Z", timezone: "Asia/Singapore", capacity: 20
+    }
+  }), 201);
+  assert.equal(scheduledOffering.offering.status, "draft");
+  const updatedOffering = await json(await api(`/api/tutor/offerings/${encodeURIComponent(scheduledOffering.offering.id)}`, {
+    method: "PATCH",
+    body: { enrolmentClosesAt: "2027-02-04T12:00:00.000Z", accessEndsAt: "2027-03-14T09:00:00.000Z", capacity: 18 }
+  }));
+  assert.equal(updatedOffering.offering.capacity, 18);
+  assert.equal(updatedOffering.offering.accessEndsAt, "2027-03-14T09:00:00.000Z");
+  const scheduledSession = await json(await api(`/api/tutor/offerings/${encodeURIComponent(scheduledOffering.offering.id)}/sessions`, {
+    method: "POST",
+    body: {
+      title: "Workshop day one", deliveryMode: "in_person",
+      startsAt: "2027-02-06T01:00:00.000Z", endsAt: "2027-02-06T09:00:00.000Z",
+      timezone: "Asia/Singapore", capacity: 18, venueName: "Learning Hall",
+      venueAddress: "1 Knowledge Road", city: "Singapore", arrivalInstructions: "Report at reception."
+    }
+  }), 201);
+  const updatedSession = await json(await api(`/api/tutor/sessions/${encodeURIComponent(scheduledSession.session.id)}`, {
+    method: "PATCH",
+    body: {
+      startsAt: "2027-02-06T01:30:00.000Z", endsAt: "2027-02-06T09:30:00.000Z",
+      venueName: "Learning Hall Annex", venueAddress: "2 Knowledge Road", arrivalInstructions: "Use the east entrance."
+    }
+  }));
+  assert.equal(updatedSession.session.venueName, "Learning Hall Annex");
+  assert.equal(updatedSession.session.startsAt, "2027-02-06T01:30:00.000Z");
+  const imageItem = (await upload("journey-cover.png", "journey image", "image/png", "Journey cover")).item;
   const documentItem = (await upload("journey-guide.pdf", "%PDF journey guide", "application/pdf", "Journey guide")).item;
   const audioItem = (await upload("journey-audio.mp3", "journey audio", "audio/mpeg", "Journey audio")).item;
   const videoItem = (await upload("journey-video.mp4", "journey video", "video/mp4", "Journey video")).item;
+  await json(await api(`/api/creator/content-library/items/${encodeURIComponent(imageItem.id)}/attachments`, {
+    method: "POST",
+    body: { entityType: "course", entityId: unpricedCourseId, role: "cover", position: 1 }
+  }));
+  const courseWithCover = await json(await api(`/api/tutor/courses/${encodeURIComponent(unpricedCourseId)}/studio`));
+  assert.ok(courseWithCover.course.cover_asset_id);
 
   const questions = [{
     id: "journey-question-1",
     prompt: "Which answer completes this product journey?",
     options: ["The verified answer", "An unverified answer"],
     correctIndex: 0,
-    explanation: "The verified answer completes the journey."
+    explanation: "The verified answer completes the journey.",
+    mediaLibraryItemId: imageItem.id,
+    mediaAltText: "A visual marker for the verified answer.",
+    mediaCaption: "Question illustration"
   }];
+  const incompleteDraft = await json(await api("/api/creator/learning-products", {
+    method: "POST",
+    body: {
+      title: "Resumable stepper draft",
+      description: "A private draft saved before the creator adds the learning content.",
+      subject: "Journey testing",
+      audience: "All learners",
+      productType: "reading",
+      estimatedMinutes: 10,
+      status: "draft",
+      metadataOnly: true
+    }
+  }), 201);
+  assert.equal(incompleteDraft.product.status, "draft");
+  const prematurePublish = await api(`/api/creator/learning-products/${encodeURIComponent(incompleteDraft.product.id)}/publish`, {
+    method: "POST", body: {}
+  });
+  assert.equal(prematurePublish.status, 409);
+  assert.equal((await prematurePublish.json()).error.code, "product_content_required");
+  await json(await api(`/api/creator/learning-products/${encodeURIComponent(incompleteDraft.product.id)}`, { method: "DELETE" }));
+
   const productMatrix = [
     { type: "ebook", source: { primaryLibraryItemId: documentItem.id } },
     { type: "reading", source: { contentUrl: "https://example.test/journey-reading" } },
@@ -219,6 +302,7 @@ try {
     assert.equal(detail.product.has_access, true);
     if (entry.assessment) {
       assert.equal(detail.product.questions.length, 1);
+      assert.equal(detail.product.questions[0].media.mediaType, "image");
       const attempt = await json(await api(`/api/learning-products/${encodeURIComponent(created.product.slug)}/attempts`, {
         method: "POST", body: { answers: [0] }
       }));
@@ -277,6 +361,37 @@ try {
     method: "POST", body: {}
   }), 201);
   assert.equal(nativeCopy.ebook.contentVersion, 2);
+
+  const creatorOfferCatalogue = await json(await api("/api/creator/product-offers"));
+  const bundleCourse = creatorOfferCatalogue.courseOfferings.find((offering) => offering.course_id === "course-maths-5")
+    ?? creatorOfferCatalogue.courseOfferings[0];
+  assert.ok(bundleCourse, "A published course offering should be available for bundling");
+  const courseBundle = await json(await api("/api/creator/product-offers", {
+    method: "POST",
+    body: {
+      title: "Course and ebook journey bundle",
+      description: "A course sold together with an independently authored learning product.",
+      priceCents: 12900,
+      currency: "SGD",
+      productIds: [publishedProducts[0].id],
+      courseOfferingIds: [bundleCourse.id]
+    }
+  }), 201);
+  assert.equal(courseBundle.offer.product_count, 2);
+  assert.equal(courseBundle.offer.courseItems.length, 1);
+  const courseRelatedOffers = await json(await api(`/api/creator/product-offers?courseId=${encodeURIComponent(bundleCourse.course_id)}`));
+  assert.ok(courseRelatedOffers.offers.some((offer) => offer.id === courseBundle.offer.id));
+  const publicOffers = await json(await api("/api/offers", { headers: {} }));
+  assert.ok(publicOffers.offers.some((offer) => offer.offerKind === "course"), "The public marketplace should expose priced course offers");
+  const publicCourseOffer = publicOffers.offers.find((offer) => offer.offerKind === "course");
+  assert.ok(Array.isArray(publicCourseOffer.topics) && publicCourseOffer.topics.length > 0, "Public offers should expose searchable topics");
+  assert.ok(Array.isArray(publicCourseOffer.includedTitles) && publicCourseOffer.includedTitles.length > 0, "Public offers should preview included titles");
+  const searchedOffers = await json(await api(`/api/offers?q=${encodeURIComponent(publicCourseOffer.includedTitles[0])}`, { headers: {} }));
+  assert.ok(searchedOffers.offers.some((offer) => offer.id === publicCourseOffer.id), "Search should match titles inside an offer");
+  const availableOffers = await json(await api("/api/offers?availability=available&sort=price_low", { headers: {} }));
+  assert.ok(availableOffers.offers.every((offer) => offer.availability === "available"));
+  assert.deepEqual(availableOffers.offers.map((offer) => offer.priceCents), availableOffers.offers.map((offer) => offer.priceCents).toSorted((left, right) => left - right));
+  assert.ok(!publicOffers.offers.some((offer) => offer.id === courseBundle.offer.id), "Draft bundles must stay out of the public marketplace");
 
   await stopWorker(worker);
   worker = null;

@@ -15,6 +15,7 @@
     "migrations_dir": "../../migrations"
   }],
   "services": [{ "binding": "CORE_API", "service": "pencilscope-api" }],
+  "r2_buckets": [{ "binding": "CONTACT_ENQUIRIES", "bucket_name": "pencilscope-contact-enquiries" }],
   "env": {
     "uat": {
       "workers_dev": true,
@@ -24,7 +25,8 @@
         "binding": "DB", "database_name": "pencilscope-db-uat",
         "database_id": "75cb8b3f-33f9-4842-ad63-9d4f9ed32a4b", "migrations_dir": "../../migrations"
       }],
-      "services": [{ "binding": "CORE_API", "service": "pencilscope-api-uat" }]
+      "services": [{ "binding": "CORE_API", "service": "pencilscope-api-uat" }],
+      "r2_buckets": [{ "binding": "CONTACT_ENQUIRIES", "bucket_name": "pencilscope-contact-enquiries-uat" }]
     },
     "production": {
       "workers_dev": true,
@@ -34,7 +36,8 @@
         "binding": "DB", "database_name": "pencilscope-db-production",
         "database_id": "5a759f23-f07d-455a-b3f6-a5e458eac229", "migrations_dir": "../../migrations"
       }],
-      "services": [{ "binding": "CORE_API", "service": "pencilscope-api-production" }]
+      "services": [{ "binding": "CORE_API", "service": "pencilscope-api-production" }],
+      "r2_buckets": [{ "binding": "CONTACT_ENQUIRIES", "bucket_name": "pencilscope-contact-enquiries-production" }]
     }
   }
 }

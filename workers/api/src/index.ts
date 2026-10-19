@@ -35,6 +35,9 @@ import { calculateOfferingPrice } from "./platform-pricing";
 import { handleGoogleMeetRequest, sendSessionReminders } from "./google-meet";
 import { handleActionHistoryRequest } from "./action-history";
 import { handlePayoutRequest } from "./payouts";
+import { handleContactEnquiryRequest } from "./contact-enquiries";
+import { handleProductOfferRequest } from "./product-offers";
+import { handleMarketplaceOfferRequest } from "./marketplace-offers";
 import { purgeExpiredLibraryItems } from "./r2-asset-catalogue";
 import {
   ensureCreatorEarningForOrder,
@@ -49,6 +52,7 @@ export type ApiEnvironment = {
   DB: D1Database;
   MEDIA: R2Bucket;
   ACTION_ARCHIVE: R2Bucket;
+  CONTACT_ENQUIRIES: R2Bucket;
   JOBS: Queue;
   APP_URL: string;
   ENVIRONMENT: string;
@@ -341,12 +345,13 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
   const form = await request.formData();
   const courseId = form.get("courseId");
   const offeringId = form.get("offeringId");
+  const productOfferId = form.get("productOfferId");
   const requestedStudentId = form.get("studentId");
   const invitationToken = form.get("invitationToken");
-  if (typeof courseId !== "string" || !courseId) {
+  if ((!productOfferId || typeof productOfferId !== "string") && (typeof courseId !== "string" || !courseId)) {
     return problem(400, "invalid_course", "Choose a valid course.");
   }
-  if (typeof offeringId !== "string" || !offeringId) {
+  if ((!productOfferId || typeof productOfferId !== "string") && (typeof offeringId !== "string" || !offeringId)) {
     return problem(400, "invalid_offering", "Choose a valid course offering.");
   }
   const actorId = authenticatedUserId(request);
@@ -362,6 +367,57 @@ async function checkout(request: Request, env: ApiEnvironment): Promise<Response
   }
   const studentId = actor.id;
   const parentUserId: string | null = null;
+
+  if (typeof productOfferId === "string" && productOfferId) {
+    const now = new Date().toISOString();
+    const offer = await env.DB.prepare(
+      `SELECT po.id, po.title, po.stripe_price_id, po.capacity, po.commerce_course_id,
+         po.commerce_offering_id
+       FROM product_offers po
+       WHERE po.id = ? AND po.status = 'published' AND po.pricing_status = 'ready'
+         AND po.stripe_price_id IS NOT NULL AND po.price_cents >= 50
+         AND (po.enrolment_opens_at IS NULL OR po.enrolment_opens_at <= ?)
+         AND (po.enrolment_closes_at IS NULL OR po.enrolment_closes_at >= ?)
+       LIMIT 1`
+    ).bind(productOfferId, now, now).first<{
+      id: string; title: string; stripe_price_id: string; capacity: number | null;
+      commerce_course_id: string; commerce_offering_id: string;
+    }>();
+    if (!offer) return problem(404, "offer_not_found", "This product offer is not available.");
+    const existing = await env.DB.prepare(
+      `SELECT id FROM enrolment_offerings WHERE course_offering_id = ?
+       AND student_user_id = ? AND status IN ('active', 'completed')`
+    ).bind(offer.commerce_offering_id, studentId).first();
+    if (existing) return problem(409, "already_enrolled", "You already have access to this offer.");
+    if (offer.capacity !== null) {
+      const occupancy = await env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM enrolment_offerings WHERE course_offering_id = ? AND status IN ('active', 'completed')`
+      ).bind(offer.commerce_offering_id).first<{ total: number }>();
+      if (Number(occupancy?.total ?? 0) >= offer.capacity) return problem(409, "offering_full", "This offer has reached its capacity.");
+    }
+    try {
+      const stripe = createStripe(requireSecret(env, "STRIPE_SECRET_KEY"));
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        line_items: [{ price: offer.stripe_price_id, quantity: 1 }],
+        success_url: `${env.APP_URL}/offers/product-${offer.id}?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${env.APP_URL}/offers/product-${offer.id}?checkout=cancelled`,
+        metadata: {
+          courseId: offer.commerce_course_id,
+          offeringId: offer.commerce_offering_id,
+          productOfferId: offer.id,
+          stripePriceId: offer.stripe_price_id,
+          studentUserId: studentId,
+          parentUserId: ""
+        }
+      });
+      if (!session.url) return problem(502, "stripe_error", "Stripe did not return a checkout URL.");
+      return Response.redirect(session.url, 303);
+    } catch (error) {
+      console.error("product_offer.checkout.failed", { traceId, productOfferId, error });
+      return problem(502, "checkout_failed", "Checkout is temporarily unavailable.");
+    }
+  }
 
   const course = await env.DB.prepare(
     `SELECT c.id, c.slug, o.id AS offering_id, o.stripe_price_id, o.capacity
@@ -449,8 +505,10 @@ async function checkoutStatus(request: Request, env: ApiEnvironment): Promise<Re
   const enrolment = await env.DB.prepare(
     `SELECT e.id AS enrolment_id, e.course_id, eo.course_offering_id,
       c.slug AS course_slug, c.title AS course_title, co.title AS offering_title,
-      (SELECT COUNT(*) FROM course_offering_learning_products olp
-       WHERE olp.course_offering_id = eo.course_offering_id) AS product_count
+      ((SELECT COUNT(*) FROM course_offering_learning_products olp
+        WHERE olp.course_offering_id = eo.course_offering_id)
+       + COALESCE((SELECT COUNT(*) FROM product_offer_course_items ci
+         WHERE ci.product_offer_id = o.product_offer_id), 0)) AS product_count
      FROM orders o
      JOIN enrolments e ON e.order_id = o.id AND e.student_user_id = o.student_user_id
      JOIN enrolment_offerings eo ON eo.order_id = o.id AND eo.enrolment_id = e.id
@@ -499,9 +557,9 @@ async function recordCompletedCheckout(env: ApiEnvironment, session: Stripe.Chec
   const enrolmentOfferingId = crypto.randomUUID();
   await db.batch([
     db.prepare(
-      `INSERT INTO orders (id, parent_user_id, student_user_id, course_id, course_offering_id,
+      `INSERT INTO orders (id, parent_user_id, student_user_id, course_id, course_offering_id, product_offer_id,
       stripe_checkout_session_id, stripe_payment_intent_id, stripe_price_id, amount_cents, currency, status, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'paid', ?, ?)
     ON CONFLICT(stripe_checkout_session_id) DO UPDATE SET
       stripe_payment_intent_id = excluded.stripe_payment_intent_id,
       stripe_price_id = excluded.stripe_price_id,
@@ -513,6 +571,7 @@ async function recordCompletedCheckout(env: ApiEnvironment, session: Stripe.Chec
       studentUserId,
       courseId,
       offeringId,
+      session.metadata?.productOfferId || null,
       session.id,
       typeof session.payment_intent === "string" ? session.payment_intent : null,
       session.metadata?.stripePriceId ?? null,
@@ -586,6 +645,42 @@ async function recordCompletedCheckout(env: ApiEnvironment, session: Stripe.Chec
          AND status IN ('pending', 'opened', 'registered')`
     ).bind(studentUserId, now, now, session.metadata?.invitationId || "__no_invitation__", courseId, offeringId)
   ]);
+  const productOfferId = session.metadata?.productOfferId;
+  if (productOfferId) {
+    const includedCourses = await db.prepare(
+      `SELECT ci.course_id, ci.course_offering_id
+       FROM product_offer_course_items ci JOIN product_offers po ON po.id = ci.product_offer_id
+       WHERE ci.product_offer_id = ? AND po.commerce_offering_id = ? ORDER BY ci.position`
+    ).bind(productOfferId, offeringId).all<{ course_id: string; course_offering_id: string }>();
+    for (const included of includedCourses.results) {
+      const existingIncludedEnrolment = await db.prepare(
+        "SELECT id FROM enrolments WHERE course_id = ? AND student_user_id = ?"
+      ).bind(included.course_id, studentUserId).first<{ id: string }>();
+      const includedEnrolmentId = existingIncludedEnrolment?.id ?? crypto.randomUUID();
+      await db.batch([
+        db.prepare(
+          `INSERT INTO enrolments (id, course_id, student_user_id, order_id, status, enrolled_at)
+           VALUES (?, ?, ?, ?, 'active', ?)
+           ON CONFLICT(course_id, student_user_id) DO UPDATE SET order_id = excluded.order_id,
+             status = 'active', enrolled_at = excluded.enrolled_at, completed_at = NULL`
+        ).bind(includedEnrolmentId, included.course_id, studentUserId, orderId, now),
+        db.prepare(
+          `INSERT INTO enrolment_offerings
+            (id, enrolment_id, course_offering_id, student_user_id, order_id, status, enrolled_at)
+           VALUES (?, ?, ?, ?, ?, 'active', ?)
+           ON CONFLICT(course_offering_id, student_user_id) DO UPDATE SET
+             enrolment_id = excluded.enrolment_id, order_id = excluded.order_id,
+             status = 'active', enrolled_at = excluded.enrolled_at, completed_at = NULL`
+        ).bind(crypto.randomUUID(), includedEnrolmentId, included.course_offering_id, studentUserId, orderId, now),
+        db.prepare(
+          `INSERT OR IGNORE INTO course_session_attendance
+            (course_session_id, student_user_id, status, updated_at)
+           SELECT id, ?, 'registered', ? FROM course_sessions
+           WHERE course_offering_id = ? AND status = 'scheduled'`
+        ).bind(studentUserId, now, included.course_offering_id)
+      ]);
+    }
+  }
   await ensureCreatorEarningForOrder(env, orderId);
 
   if (env.STRIPE_SECRET_KEY && typeof session.payment_intent === "string") {
@@ -698,11 +793,13 @@ async function createCourse(request: Request, env: ApiEnvironment): Promise<Resp
   const id = crypto.randomUUID();
   const slug = slugifyCourse(input.title, id);
   const now = new Date().toISOString();
-  let breakdown;
-  try {
-    breakdown = calculateOfferingPrice(env, input.priceCents);
-  } catch (error) {
-    return problem(400, "invalid_price", error instanceof Error ? error.message : "Invalid course price.");
+  let breakdown = { checkoutPriceCents: 0, creatorPriceCents: 0 };
+  if (input.priceCents > 0) {
+    try {
+      breakdown = calculateOfferingPrice(env, input.priceCents);
+    } catch (error) {
+      return problem(400, "invalid_price", error instanceof Error ? error.message : "Invalid course price.");
+    }
   }
   const course: CoursePricingRecord = {
     id,
@@ -1018,6 +1115,8 @@ export default {
       : requestedPathname;
 
     if (request.method === "GET" && pathname === "/api/health") return health(env);
+    const contactEnquiryResponse = await handleContactEnquiryRequest(request, env, pathname);
+    if (contactEnquiryResponse) return contactEnquiryResponse;
     const mcpOAuthResponse = await handleMcpOAuthRequest(request, env, pathname);
     if (mcpOAuthResponse) return mcpOAuthResponse;
     await touchActiveSession(request, env);
@@ -1065,6 +1164,10 @@ export default {
     if (journeyResponse) return journeyResponse;
     const learningProductResponse = await handleLearningProductRequest(request, env, pathname);
     if (learningProductResponse) return learningProductResponse;
+    const marketplaceOfferResponse = await handleMarketplaceOfferRequest(request, env, pathname);
+    if (marketplaceOfferResponse) return marketplaceOfferResponse;
+    const productOfferResponse = await handleProductOfferRequest(request, env, pathname);
+    if (productOfferResponse) return productOfferResponse;
     if (request.method === "GET" && pathname === "/api/courses") return courses(env);
     const offeringListMatch = pathname.match(/^\/api\/courses\/([^/]+)\/offerings$/);
     if (request.method === "GET" && offeringListMatch) {

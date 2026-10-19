@@ -23,10 +23,13 @@ export function parseCreateCourseInput(value: unknown): CreateCourseInput {
   if (typeof input.deliveryMode !== "string" || !deliveryModes.includes(input.deliveryMode as DeliveryMode)) {
     throw new Error("deliveryMode is invalid");
   }
-  if (!Number.isSafeInteger(input.priceCents) || Number(input.priceCents) < 50 || Number(input.priceCents) > 1_000_000) {
-    throw new Error("priceCents must be an integer between 50 and 1000000");
+  const publish = input.publish === true;
+  const hasPrice = input.priceCents !== undefined && input.priceCents !== null && input.priceCents !== "";
+  if (hasPrice && (!Number.isSafeInteger(input.priceCents) || Number(input.priceCents) < 50 || Number(input.priceCents) > 1_000_000)) {
+    throw new Error("priceCents must be an integer between 50 and 1000000 when provided");
   }
-  if (input.currency !== "SGD") throw new Error("Only SGD pricing is currently supported");
+  if (publish && !hasPrice) throw new Error("priceCents is required when publishing");
+  if (input.currency !== undefined && input.currency !== "SGD") throw new Error("Only SGD pricing is currently supported");
 
   const categorySlugs = Array.isArray(input.categorySlugs)
     ? input.categorySlugs
@@ -42,9 +45,9 @@ export function parseCreateCourseInput(value: unknown): CreateCourseInput {
     subject,
     primaryLevel,
     deliveryMode: input.deliveryMode as DeliveryMode,
-    priceCents: Number(input.priceCents),
+    priceCents: hasPrice ? Number(input.priceCents) : 0,
     currency: "SGD",
-    publish: input.publish === true,
+    publish,
     categorySlugs
   };
 }

@@ -1,7 +1,9 @@
 ---
 import "@/styles/global.css";
 import "@/styles/journeys.css";
+import "@/styles/offers.css";
 import { requestApi } from "@/lib/api-client";
+import ContactAssistant from "@/components/ContactAssistant.astro";
 type Props = {
   title?: string;
   description?: string;
@@ -53,6 +55,10 @@ if (signedIn) {
 const socialImageUrl = new URL(socialImage, Astro.url.origin).toString();
 const currentPath = Astro.url.pathname.replace(/\/$/, "") || "/";
 const currentWorkspace = Astro.url.searchParams.get("workspace");
+const contactAssistantVisible = !signedIn && !embedded && (
+  currentPath === "/" || currentPath === "/courses" || currentPath.startsWith("/courses/") ||
+  currentPath === "/library" || currentPath.startsWith("/library/")
+);
 const creatorContext = signedIn && (
   currentPath === "/create" || currentPath === "/ebook-studio" || currentPath === "/content-library" || currentPath.startsWith("/tutor") ||
   (currentPath === "/dashboard" && currentWorkspace === "creation")
@@ -98,7 +104,7 @@ const profileInitials = nameParts.length > 1
     {!embedded && <header class="site-header">
       <div class="shell nav-wrap">
         <a class="brand" href="/" aria-label="PencilScope home"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand-copy"><strong>PencilScope</strong><small>Building smarter world</small></span></a>
-        <nav aria-label="Primary navigation"><a href="/library">Explore</a><a href="/courses">Courses</a>{!signedIn && <a href="/#how-it-works">How it works</a>}</nav>
+        <nav aria-label="Primary navigation"><a href="/offers">Explore learning</a><a href="/courses">Courses</a>{!signedIn && <a href="/#how-it-works">How it works</a>}</nav>
         {learningContext && <span class="nav-context-marker learning-context-marker" aria-label="Learning workspace"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.5 12 3l8 2.5v11L12 19l-8-2.5Z"/><path d="M12 3v16"/></svg>Learning mode</span>}
         {creatorContext && <span class="nav-context-marker creator-context-marker" aria-label="Creation workspace"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m4 20 4.5-1 10-10a2.1 2.1 0 0 0-3-3l-10 10L4 20Z"/><path d="m13.8 7.2 3 3"/></svg>Creation mode</span>}
         {networkContext && <span class="nav-context-marker network-context-marker" aria-label="Network workspace"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="7" r="2.5"/><path d="M3.5 19c.5-4 2-6 4.5-6s4 2 4.5 6M13 14c1-.9 2.2-1.4 3.7-1.4 2.2 0 3.5 1.5 3.8 4.4"/></svg>Network</span>}
@@ -147,7 +153,7 @@ const profileInitials = nameParts.length > 1
         </div>
       </div>
     </header>}    {!embedded && signedIn && <nav class="mobile-app-nav" aria-label="Mobile navigation">
-      <a href="/library"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h7v14H4zM13 5h7v14h-7z"/><path d="M7 9h1M16 9h1"/></svg><span>Explore</span></a>
+      <a href="/offers"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5h7v14H4zM13 5h7v14h-7z"/><path d="M7 9h1M16 9h1"/></svg><span>Explore</span></a>
       <a class:list={{ active: learningContext }} aria-current={learningContext ? "page" : undefined} href="/dashboard?workspace=learning"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 5.5 12 3l8 2.5v11L12 19l-8-2.5Z"/><path d="M12 3v16"/></svg><span>Learning</span></a>
       <a class:list={["mobile-create", { active: createFlowActive }]} aria-current={createFlowActive ? "page" : undefined} href="/create"><span aria-hidden="true">＋</span><small>Create</small></a>
       <a class:list={{ active: creatorContext }} aria-current={creatorContext && !createFlowActive ? "page" : undefined} href="/dashboard?workspace=creation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg><span>Studio</span></a>
@@ -157,11 +163,13 @@ const profileInitials = nameParts.length > 1
     {!embedded && <footer class="site-footer">
       <div class="shell footer-grid">
         <div><a class="brand brand-footer" href="/"><span class="brand-symbol" aria-hidden="true"><i></i><i></i><i></i></span><span class="brand-copy"><strong>PencilScope</strong><small>Building smarter world</small></span></a><p>Curious minds grow here.</p></div>
-        <div><strong>Learn</strong><a href="/library">Learning library</a><a href="/courses">All courses</a><a href="/my-learning">My learning</a><a href="/my-results">My results</a></div>
+        <div><strong>Learn</strong><a href="/offers">All learning</a><a href="/courses">Courses</a><a href="/my-learning">My learning</a><a href="/my-results">My results</a></div>
         <div><strong>Create</strong><a href="/create">Create content</a><a href="/tutor?mode=new">Create a course</a><a href="/privacy">Privacy</a></div>
         <div class="footer-note"><span>Created for curious people everywhere</span><span>© {new Date().getFullYear()} PencilScope</span></div>
       </div>
-    </footer>}  </body>
+    </footer>}
+    {contactAssistantVisible && <ContactAssistant sourcePath={`${Astro.url.pathname}${Astro.url.search}`} />}
+  </body>
 </html>
 
 <script>

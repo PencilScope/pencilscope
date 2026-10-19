@@ -104,6 +104,35 @@ try {
   worker = await startWorker(configs.api, 8801, "/api/health");
   assert.equal((await request(origins.api, "/api/dashboard")).status, 401);
 
+  const contactInput = {
+    submissionId: crypto.randomUUID(),
+    name: "E2E Contact",
+    countryCode: "SG",
+    countryName: "Singapore",
+    callingCode: "+65",
+    phone: "81234567",
+    enquiryType: "creator_support",
+    message: "I need help publishing my first learning product.",
+    sourcePath: "/courses",
+    consentVersion: "2026-10"
+  };
+  const contact = await json(await request(origins.api, "/api/contact-enquiries", {
+    method: "POST", body: contactInput
+  }), 201);
+  const contactRetry = await json(await request(origins.api, "/api/contact-enquiries", {
+    method: "POST", body: contactInput
+  }));
+  assert.equal(contactRetry.enquiry.referenceCode, contact.enquiry.referenceCode);
+  const expiredContact = await json(await request(origins.api, "/api/contact-enquiries", {
+    method: "POST",
+    body: {
+      ...contactInput,
+      submissionId: crypto.randomUUID(),
+      name: "Expired E2E Contact",
+      message: "This enquiry verifies permanent purge after the recovery window."
+    }
+  }), 201);
+
   const created = await json(await request(origins.api, "/api/creator/learning-products", {
     method: "POST",
     headers: user("tutor-tan"),
@@ -202,6 +231,12 @@ try {
   await stopWorker(worker);
   worker = null;
 
+  await run([
+    "d1", "execute", "DB", "--local", "--persist-to", state, "--config", configs.api,
+    "--command",
+    `UPDATE contact_enquiries SET status = 'deleted', deleted_at = datetime('now', '-8 days'), recoverable_until = datetime('now', '-1 day') WHERE id = '${expiredContact.enquiry.id}'`
+  ]);
+
   worker = await startWorker(configs.admin, 8803, "/");
   assert.equal((await request(origins.admin, "/")).status, 403);
   assert.equal((await request(origins.admin, "/", { headers: staff("finance@e2e.invalid") })).status, 403);
@@ -217,11 +252,41 @@ try {
   assert.equal(adminPage.status, 200);
   assert.match(adminPage.headers.get("cache-control") ?? "", /no-store/i);
   assert.ok(adminPage.headers.has("content-security-policy"));
-  for (const endpoint of ["overview", "users", "notifications", "courses", "orders", "settlements", "disputes", "sessions", "audit", "health"]) {
+  for (const endpoint of ["overview", "enquiries", "users", "notifications", "courses", "orders", "settlements", "disputes", "sessions", "audit", "health"]) {
     assert.equal((await request(origins.admin, `/api/admin/${endpoint}`, {
       headers: staff("system-admin@e2e.invalid")
     })).status, 200, endpoint);
   }
+  const enquiries = await json(await request(origins.admin, "/api/admin/enquiries", {
+    headers: staff("system-admin@e2e.invalid")
+  }));
+  assert.ok(enquiries.enquiries.some((entry) => entry.id === contact.enquiry.id));
+  const enquiryDetail = await json(await request(origins.admin, `/api/admin/enquiries/${contact.enquiry.id}`, {
+    headers: staff("system-admin@e2e.invalid")
+  }));
+  assert.equal(enquiryDetail.enquiry.payload.enquiry.message, contactInput.message);
+  assert.equal(enquiryDetail.enquiry.payload.contact.phone.e164, "+6581234567");
+  assert.equal((await request(origins.admin, `/api/admin/enquiries/${contact.enquiry.id}/status`, {
+    method: "POST", headers: staff("auditor@e2e.invalid"),
+    body: { status: "in_progress", note: "Auditor mutation must fail" }
+  })).status, 403);
+  await json(await request(origins.admin, `/api/admin/enquiries/${contact.enquiry.id}/status`, {
+    method: "POST", headers: staff("support@e2e.invalid"),
+    body: { status: "in_progress", note: "Support team started reviewing the enquiry." }
+  }));
+  const deletedEnquiry = await json(await request(origins.admin, `/api/admin/enquiries/${contact.enquiry.id}/status`, {
+    method: "POST", headers: staff("system-admin@e2e.invalid"),
+    body: { status: "deleted", note: "E2E recoverable deletion verification." }
+  }));
+  const recoveryMs = Date.parse(deletedEnquiry.enquiry.recoverableUntil) - Date.now();
+  assert.ok(recoveryMs > 6.9 * 86_400_000 && recoveryMs <= 7.1 * 86_400_000);
+  await json(await request(origins.admin, `/api/admin/enquiries/${contact.enquiry.id}/restore`, {
+    method: "POST", headers: staff("system-admin@e2e.invalid")
+  }));
+  assert.equal((await request(origins.admin, `/api/admin/enquiries/${expiredContact.enquiry.id}`, {
+    headers: staff("system-admin@e2e.invalid")
+  })).status, 410);
+
   const health = await json(await request(origins.admin, "/api/admin/health", {
     headers: staff("system-admin@e2e.invalid")
   }));
@@ -254,12 +319,12 @@ try {
     headers: staff("system-admin@e2e.invalid")
   }));
   const auditActions = audit.events.map((event) => event.action);
-  for (const action of ["notification.published", "user.deactivated", "user.activated", "payment.case_closed"]) {
+  for (const action of ["contact_enquiry.viewed", "contact_enquiry.status_changed", "contact_enquiry.restored", "notification.published", "user.deactivated", "user.activated", "payment.case_closed"]) {
     assert.ok(auditActions.includes(action), `Missing audit action: ${action}`);
   }
 
   process.stdout.write(
-    "Operations E2E passed: tenant isolation, learner/creator payments, billing RBAC and reports, system-admin RBAC, mutations, health and audit.\n"
+    "Operations E2E passed: tenant isolation, contact R2 catalogue and recovery, learner/creator payments, billing RBAC and reports, system-admin RBAC, mutations, health and audit.\n"
   );
 } finally {
   await stopWorker(worker);

@@ -508,13 +508,20 @@ async function attachResource(request: Request, env: ApiEnvironment, user: Actor
   const role = clean(input.role, 40);
   const position = Math.max(1, Math.round(Number(input.position) || 1));
   const requiredPercent = Math.min(100, Math.max(1, Math.round(Number(input.requiredPercent) || 90)));
-  if (!["learning_product", "lesson", "ebook", "ebook_chapter"].includes(entityType)
+  if (!["course", "learning_product", "lesson", "ebook", "ebook_chapter"].includes(entityType)
     || !entityId || !resourceRoles.has(role)) {
     return problem(400, "invalid_resource_link", "Choose a valid content target, role and position.");
   }
 
   let target: Record<string, unknown> | null = null;
-  if (entityType === "learning_product") {
+  if (entityType === "course") {
+    target = await env.DB.prepare(
+      `SELECT c.id, c.status FROM courses c WHERE c.id = ? AND (c.tutor_id = ? OR EXISTS (
+         SELECT 1 FROM course_members cm WHERE cm.course_id = c.id AND cm.user_id = ?
+           AND cm.status = 'active' AND cm.member_role IN ('owner', 'administrator', 'editor')
+       ))`
+    ).bind(entityId, user.id, user.id).first<Record<string, unknown>>();
+  } else if (entityType === "learning_product") {
     target = await env.DB.prepare(
       "SELECT id, product_type, status FROM learning_products WHERE id = ? AND creator_id = ?"
     ).bind(entityId, user.id).first<Record<string, unknown>>();
@@ -580,6 +587,10 @@ async function attachResource(request: Request, env: ApiEnvironment, user: Actor
        VALUES (?, ?, ?, ?) ON CONFLICT(lesson_id, media_asset_id) DO UPDATE SET
        position = excluded.position, required_percent = excluded.required_percent`
     ).bind(entityId, item.media_asset_id, position, requiredPercent));
+  }
+  if (entityType === "course" && role === "cover" && item.media_asset_id) {
+    statements.push(env.DB.prepare("UPDATE courses SET cover_asset_id = ?, updated_at = ? WHERE id = ?")
+      .bind(item.media_asset_id, now, entityId));
   }
   if (entityType === "ebook" && role === "cover" && item.media_asset_id) {
     statements.push(env.DB.prepare("UPDATE ebooks SET cover_asset_id = ?, updated_at = ? WHERE id = ?")

@@ -56,6 +56,7 @@ export type LearningProduct = {
   offer_course_slug?: string | null;
   offer_title?: string | null;
   offer_price_cents?: number | null;
+  product_offer_id?: string | null;
 };
 
 export const learningProductMeta: Record<LearningProductType, {

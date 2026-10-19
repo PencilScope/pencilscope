@@ -1,0 +1,38 @@
+---
+import ProductIcon from "@/components/ProductIcon.astro";
+import { offerAvailabilityLabel, offerPrice, type MarketplaceOffer } from "@/lib/offers";
+import type { ProductIconName } from "@/lib/product-catalog";
+
+type Props = { offer: MarketplaceOffer; compact?: boolean };
+const { offer, compact = false } = Astro.props;
+const supportedIcons = new Set<ProductIconName>(["course", "online_course", "in_person_course", "video_course", "audio_book", "ebook", "quiz", "test", "mock_exam", "reading"]);
+const requestedFormat = offer.courseCount ? "course" : offer.formats[0] ?? "ebook";
+const primaryFormat: ProductIconName = supportedIcons.has(requestedFormat as ProductIconName) ? requestedFormat as ProductIconName : "course";
+const included = offer.formats.slice(0, compact ? 3 : 5);
+const more = Math.max(0, offer.formats.length - included.length);
+const delivery = offer.deliveryMode.replaceAll("_", " ").replaceAll(",", " · ");
+const previewTitles = offer.includedTitles.slice(0, 2);
+const remainingTitles = Math.max(0, offer.includedTitles.length - previewTitles.length);
+const learningType = offer.offerKind === "bundle" ? "Bundle" : offer.offerKind === "course" ? "Course" : "Single resource";
+---
+
+<article class:list={["offer-card", `offer-${offer.offerKind}`, `availability-${offer.availability}`]}>
+  <a class="offer-card-link" href={`/offers/${offer.slug}`}>
+    <div class="offer-card-visual">
+      {offer.coverAssetId ? <img src={`/api/media/${offer.coverAssetId}`} alt="" loading="lazy" /> : <ProductIcon name={primaryFormat} />}
+      <span class="offer-kind">{learningType}</span>
+      <span class="offer-availability">{offerAvailabilityLabel[offer.availability]}</span>
+    </div>
+    <div class="offer-card-body">
+      <span class="eyebrow">{delivery || "Self-paced"} · by {offer.creatorName}</span>
+      <h3>{offer.title}</h3>
+      <p>{offer.description}</p>
+      {previewTitles.length > 0 && <p class="offer-card-included"><strong>Includes:</strong> {previewTitles.join(", ")}{remainingTitles ? ` +${remainingTitles} more` : ""}</p>}
+      <div class="offer-includes" aria-label="Included product formats">
+        {included.map((format) => <span>{format.replaceAll("_", " ")}</span>)}
+        {more > 0 && <span>+{more} more</span>}
+      </div>
+    </div>
+    <footer><span>{offer.startsAt ? `Starts ${new Date(offer.startsAt).toLocaleDateString("en-SG")}` : "Start anytime"}</span><b>{offerPrice(offer)}</b></footer>
+  </a>
+</article>

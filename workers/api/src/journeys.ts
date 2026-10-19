@@ -2,7 +2,7 @@ import { getCreatorActorById } from "../../../src/lib/auth";
 import { json, problem } from "../../../src/lib/http";
 import type { ApiEnvironment } from "./index";
 import { calculateOfferingPrice } from "./platform-pricing";
-import { createGoogleMeetForSession } from "./google-meet";
+import { createGoogleMeetForSession, updateGoogleMeetForSession } from "./google-meet";
 import { questionMediaInsert, resolveQuestionMedia, serveQuestionMediaVersion } from "./question-media";
 
 type UserRow = {
@@ -1856,6 +1856,142 @@ async function tutorAuthoring(
     return json({ deleted: true, questionId, assessmentId: question.assessment_id });
   }
 
+  const offeringUpdateMatch = pathname.match(/^\/api\/tutor\/offerings\/([^/]+)$/);
+  if (request.method === "PATCH" && offeringUpdateMatch) {
+    const offeringId = decodeURIComponent(offeringUpdateMatch[1]);
+    const current = await env.DB.prepare(
+      `SELECT o.*, c.tutor_id FROM course_offerings o JOIN courses c ON c.id = o.course_id
+       WHERE o.id = ? AND (c.tutor_id = ? OR ? = 'admin')`
+    ).bind(offeringId, actor.id, actor.role).first<Record<string, unknown>>();
+    if (!current) return problem(403, "offering_forbidden", "You cannot edit this course offering.");
+    if (current.status !== "draft") return problem(409, "draft_offering_required", "Only draft offers can be changed. Create a new draft offer for schedule or pricing changes.");
+    const input = await parseJson(request);
+    const title = input?.title === undefined ? String(current.title) : text(input.title, 2, 120);
+    const deliveryMode = input?.deliveryMode === undefined ? String(current.delivery_mode)
+      : ["recorded", "live_online", "in_person", "hybrid"].includes(String(input.deliveryMode)) ? String(input.deliveryMode) : "";
+    const creatorPriceCents = input?.priceCents === undefined ? Number(current.creator_price_cents) : Number(input.priceCents);
+    const plannedMeetingMinutes = deliveryMode === "live_online" || deliveryMode === "hybrid"
+      ? Number(input?.plannedMeetingMinutes ?? current.planned_meeting_minutes ?? 0) : 0;
+    const plannedMeetingParticipants = deliveryMode === "live_online" || deliveryMode === "hybrid"
+      ? Number(input?.plannedMeetingParticipants ?? current.planned_meeting_participants ?? 0) : 0;
+    const capacity = input?.capacity === undefined ? (current.capacity === null ? null : Number(current.capacity))
+      : input.capacity === null || input.capacity === "" ? null : Number(input.capacity);
+    const plannedPaidLearners = Number(input?.plannedPaidLearners ?? current.planned_paid_learners ?? capacity ?? 1);
+    const pickDate = (key: string, currentValue: unknown) => input?.[key] === undefined
+      ? (typeof currentValue === "string" ? currentValue : null)
+      : typeof input[key] === "string" && input[key] ? String(input[key]) : null;
+    const startsAt = pickDate("startsAt", current.starts_at);
+    const endsAt = pickDate("endsAt", current.ends_at);
+    const enrolmentOpensAt = pickDate("enrolmentOpensAt", current.enrolment_opens_at);
+    const enrolmentClosesAt = pickDate("enrolmentClosesAt", current.enrolment_closes_at);
+    const accessEndsAt = pickDate("accessEndsAt", current.access_ends_at);
+    const timezone = input?.timezone === undefined ? String(current.timezone ?? "Asia/Singapore")
+      : typeof input.timezone === "string" ? input.timezone.trim().slice(0, 80) : "";
+    const dates = [startsAt, endsAt, enrolmentOpensAt, enrolmentClosesAt, accessEndsAt].filter((value): value is string => Boolean(value));
+    if (!title || !deliveryMode || !timezone || !Number.isSafeInteger(creatorPriceCents) ||
+        (capacity !== null && (!Number.isInteger(capacity) || capacity < 1)) ||
+        dates.some((value) => !Number.isFinite(Date.parse(value))) ||
+        (startsAt && endsAt && Date.parse(endsAt) <= Date.parse(startsAt)) ||
+        (enrolmentOpensAt && enrolmentClosesAt && Date.parse(enrolmentClosesAt) <= Date.parse(enrolmentOpensAt))) {
+      return problem(400, "invalid_offering", "Provide a valid title, price, schedule, booking window, timezone and capacity.");
+    }
+    let pricing;
+    try {
+      pricing = calculateOfferingPrice(env, creatorPriceCents, plannedMeetingMinutes, plannedMeetingParticipants, plannedPaidLearners);
+    } catch (error) {
+      return problem(400, "invalid_offering_price", error instanceof Error ? error.message : "The offering price is invalid.");
+    }
+    const now = new Date().toISOString();
+    await env.DB.prepare(
+      `UPDATE course_offerings SET title = ?, enrolment_opens_at = ?, enrolment_closes_at = ?,
+       access_ends_at = ?, price_cents = ?, creator_price_cents = ?, platform_fixed_fee_cents = ?,
+       service_fee_bps = ?, service_fee_cents = ?, planned_meeting_minutes = ?,
+       planned_meeting_participants = ?, planned_paid_learners = ?, planned_meeting_cost_cents = ?,
+       pricing_status = 'pending', delivery_mode = ?, starts_at = ?, ends_at = ?, timezone = ?, capacity = ?, updated_at = ?
+       WHERE id = ?`
+    ).bind(title, enrolmentOpensAt, enrolmentClosesAt, accessEndsAt, pricing.checkoutPriceCents,
+      pricing.creatorPriceCents, pricing.platformFixedFeeCents, pricing.serviceFeeBps,
+      pricing.serviceFeeCents, pricing.plannedMeetingMinutes, pricing.plannedMeetingParticipants,
+      pricing.plannedPaidLearners, pricing.plannedMeetingCostCents, deliveryMode,
+      startsAt, endsAt, timezone, capacity, now, offeringId).run();
+    return json({ offering: { id: offeringId, courseId: current.course_id, title, deliveryMode, startsAt, endsAt,
+      enrolmentOpensAt, enrolmentClosesAt, accessEndsAt, timezone, capacity,
+      priceCents: pricing.checkoutPriceCents, pricing, status: "draft" } });
+  }
+  const sessionUpdateMatch = pathname.match(/^\/api\/tutor\/sessions\/([^/]+)$/);
+  if (request.method === "PATCH" && sessionUpdateMatch) {
+    const sessionId = decodeURIComponent(sessionUpdateMatch[1]);
+    const current = await env.DB.prepare(
+      `SELECT s.*, o.status AS offering_status, o.planned_meeting_minutes, o.planned_meeting_participants,
+        c.id AS course_id, c.title AS course_title, c.tutor_id, v.name AS venue_name,
+        v.address_line_1 AS venue_address, v.city, v.arrival_instructions
+       FROM course_sessions s JOIN course_offerings o ON o.id = s.course_offering_id
+       JOIN courses c ON c.id = o.course_id LEFT JOIN venues v ON v.id = s.venue_id
+       WHERE s.id = ? AND (c.tutor_id = ? OR ? = 'admin')`
+    ).bind(sessionId, actor.id, actor.role).first<Record<string, unknown>>();
+    if (!current) return problem(403, "session_forbidden", "You cannot edit this course session.");
+    if (current.offering_status !== "draft" || current.status !== "scheduled") {
+      return problem(409, "draft_offering_required", "Only scheduled sessions in a draft offer can be changed.");
+    }
+    const input = await parseJson(request);
+    const deliveryMode = String(current.delivery_mode);
+    if (input?.deliveryMode !== undefined && input.deliveryMode !== deliveryMode) {
+      return problem(409, "session_delivery_locked", "Create a new session to change between online and in-person delivery.");
+    }
+    const title = input?.title === undefined ? String(current.title) : text(input.title, 2, 160);
+    const startsAt = input?.startsAt === undefined ? String(current.starts_at) : String(input.startsAt ?? "");
+    const endsAt = input?.endsAt === undefined ? String(current.ends_at) : String(input.endsAt ?? "");
+    const timezone = input?.timezone === undefined ? String(current.timezone ?? "Asia/Singapore")
+      : typeof input.timezone === "string" ? input.timezone.trim().slice(0, 80) : "";
+    const capacity = input?.capacity === undefined ? (current.capacity === null ? null : Number(current.capacity))
+      : input.capacity === null || input.capacity === "" ? null : Number(input.capacity);
+    const venueName = input?.venueName === undefined ? String(current.venue_name ?? "") : text(input.venueName, 2, 160);
+    const venueAddress = input?.venueAddress === undefined ? String(current.venue_address ?? "") : text(input.venueAddress, 3, 300);
+    const city = input?.city === undefined ? String(current.city ?? "Singapore") : text(input.city, 1, 120);
+    const arrivalInstructions = input?.arrivalInstructions === undefined ? String(current.arrival_instructions ?? "")
+      : typeof input.arrivalInstructions === "string" ? input.arrivalInstructions.slice(0, 1000) : "";
+    if (!title || !timezone || !Number.isFinite(Date.parse(startsAt)) || !Number.isFinite(Date.parse(endsAt)) ||
+        Date.parse(endsAt) <= Date.parse(startsAt) ||
+        (capacity !== null && (!Number.isInteger(capacity) || capacity < 1)) ||
+        (deliveryMode === "in_person" && (!venueName || !venueAddress))) {
+      return problem(400, "invalid_session", "Provide a valid title, schedule, timezone, capacity and venue.");
+    }
+    if (deliveryMode === "live_online") {
+      const durationMinutes = Math.ceil((Date.parse(endsAt) - Date.parse(startsAt)) / 60_000);
+      const existing = await env.DB.prepare(
+        `SELECT COALESCE(SUM((julianday(ends_at) - julianday(starts_at)) * 1440), 0) AS minutes
+         FROM course_sessions WHERE course_offering_id = ? AND id != ? AND delivery_mode = 'live_online' AND status != 'cancelled'`
+      ).bind(current.course_offering_id, sessionId).first<{ minutes: number }>();
+      if (Number(current.planned_meeting_minutes) <= 0 || Number(existing?.minutes ?? 0) + durationMinutes > Number(current.planned_meeting_minutes) + 1) {
+        return problem(409, "meeting_plan_exceeded", "This schedule exceeds the live minutes included in the draft offer price.");
+      }
+      if (capacity && Number(current.planned_meeting_participants) > 0 && capacity + 1 > Number(current.planned_meeting_participants)) {
+        return problem(409, "meeting_participants_exceeded", "Session capacity exceeds the participant count included in the draft offer price.");
+      }
+      if (!current.google_calendar_event_id) return problem(409, "google_event_required", "This online session is missing its Google Calendar event.");
+      try {
+        await updateGoogleMeetForSession(env, {
+          ownerUserId: String(current.tutor_id), eventId: String(current.google_calendar_event_id),
+          title: `${current.course_title}: ${title}`, description: `PencilScope online class for ${current.course_title}.`,
+          startsAt, endsAt, timezone
+        });
+      } catch (error) {
+        return problem(502, "google_meet_update_failed", error instanceof Error ? error.message : "Google Meet could not be updated.");
+      }
+    }
+    const now = new Date().toISOString();
+    const statements = [env.DB.prepare(
+      `UPDATE course_sessions SET title = ?, starts_at = ?, ends_at = ?, timezone = ?, capacity = ?, updated_at = ? WHERE id = ?`
+    ).bind(title, startsAt, endsAt, timezone, capacity, now, sessionId)];
+    if (deliveryMode === "in_person" && current.venue_id) {
+      statements.push(env.DB.prepare(
+        `UPDATE venues SET name = ?, address_line_1 = ?, city = ?, arrival_instructions = ?, updated_at = ? WHERE id = ?`
+      ).bind(venueName, venueAddress, city, arrivalInstructions, now, current.venue_id));
+    }
+    await env.DB.batch(statements);
+    return json({ session: { id: sessionId, offeringId: current.course_offering_id, title, deliveryMode,
+      startsAt, endsAt, timezone, capacity, ...(deliveryMode === "in_person" ? { venueName, venueAddress, city, arrivalInstructions } : {}) } });
+  }
   const courseOfferingMatch = pathname.match(/^\/api\/tutor\/courses\/([^/]+)\/offerings$/);
   if (request.method === "POST" && courseOfferingMatch) {
     const courseId = decodeURIComponent(courseOfferingMatch[1]);

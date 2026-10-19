@@ -430,6 +430,9 @@ async function creatorOverview(request: Request, env: ApiEnvironment): Promise<R
         'course' AS content_type, c.content_version,
         CASE WHEN c.status = 'published' AND c.listing_status = 'listed' THEN 'published'
           WHEN c.status = 'published' THEN 'unpublished' ELSE c.status END AS display_status,
+        CASE WHEN EXISTS (SELECT 1 FROM course_offerings live_o WHERE live_o.course_id = c.id
+          AND live_o.status = 'published' AND live_o.pricing_status = 'ready'
+          AND live_o.stripe_price_id IS NOT NULL AND live_o.price_cents >= 50) THEN 1 ELSE 0 END AS has_live_offer,
         c.updated_at, CASE WHEN c.tutor_id = ? THEN 'owned' ELSE 'collaborating' END AS ownership_scope,
         CASE WHEN c.tutor_id = ? THEN 'owner' ELSE cm.member_role END AS member_role,
         CASE WHEN c.tutor_id = ? OR ? = 'admin' OR cm.member_role IN ('owner', 'administrator', 'editor') THEN 1 ELSE 0 END AS can_edit,
@@ -463,6 +466,17 @@ async function creatorOverview(request: Request, env: ApiEnvironment): Promise<R
         p.content_url, p.estimated_minutes, p.product_type AS content_type, p.content_version,
         CASE WHEN p.status = 'published' AND p.listing_status = 'listed' THEN 'published'
           WHEN p.status = 'published' THEN 'unpublished' ELSE p.status END AS display_status,
+        CASE WHEN EXISTS (SELECT 1 FROM product_offer_items live_i JOIN product_offers live_o
+          ON live_o.id = live_i.product_offer_id WHERE live_i.learning_product_id = p.id
+          AND live_o.status = 'published' AND live_o.pricing_status = 'ready'
+          AND live_o.stripe_price_id IS NOT NULL AND live_o.price_cents >= 50)
+          OR EXISTS (SELECT 1 FROM course_offering_learning_products live_ci
+          JOIN course_offerings live_co ON live_co.id = live_ci.course_offering_id
+          JOIN courses live_c ON live_c.id = live_co.course_id
+          WHERE live_ci.learning_product_id = p.id AND live_co.status = 'published'
+            AND live_co.pricing_status = 'ready' AND live_co.stripe_price_id IS NOT NULL
+            AND live_co.price_cents >= 50 AND live_c.status = 'published' AND live_c.listing_status = 'listed')
+          THEN 1 ELSE 0 END AS has_live_offer,
         p.updated_at, 'owned' AS ownership_scope, 'owner' AS member_role, 1 AS can_edit,
         COUNT(DISTINCT CASE WHEN (? IS NULL OR e.granted_at >= ?) THEN e.id END) AS subscribed_count,
         COUNT(DISTINCT CASE WHEN (? IS NULL OR e.granted_at >= ?)

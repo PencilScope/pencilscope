@@ -4,7 +4,7 @@ import CreateWithAI from "@/components/CreateWithAI.astro";
 import ProductIcon from "@/components/ProductIcon.astro";
 import { requestApi } from "@/lib/api-client";
 import { learningProductMeta, learningProductTypes, type LearningProduct } from "@/lib/learning-products";
-import { creatorProductCatalogue, productCatalogueKey } from "@/lib/product-catalog";
+import { productCatalogueKey } from "@/lib/product-catalog";
 
 const userId = await Astro.session?.get("userId");
 if (typeof userId !== "string") return Astro.redirect("/sign-in?next=/create");
@@ -30,16 +30,24 @@ const allowedStatuses = new Set(["all", "draft", "published", "unpublished", "ar
 const statusFilter = allowedStatuses.has(requestedStatus) ? requestedStatus : "all";
 const productDisplayStatus = (product: LearningProduct) =>
   product.status === "published" && product.listing_status === "unpublished" ? "unpublished" : product.status;
+const productStatusLabel = (product: LearningProduct) =>
+  product.status === "draft" ? "Draft"
+    : product.status === "archived" ? "Archived"
+      : product.listing_status === "unpublished" ? "Closed"
+        : product.offer_title ? "Live" : "Content ready";
 const visibleProducts = statusFilter === "all"
   ? products
   : products.filter((product) => productDisplayStatus(product) === statusFilter);
 const requestedProductType = learningProductTypes.find((type) => type === Astro.url.searchParams.get("type"))
   ?? learningProductTypes[0];
 const requestedProductLabel = learningProductMeta[requestedProductType].label.toLowerCase();
-const primaryStandaloneTypes = ["audio", "ebook", "quiz", "test", "mock_exam"] as const;
-const editorProductTypes = editProduct && !primaryStandaloneTypes.includes(editProduct.product_type as typeof primaryStandaloneTypes[number])
-  ? [editProduct.product_type, ...primaryStandaloneTypes]
-  : primaryStandaloneTypes;
+const editorProductTypes = ["audio", "ebook", "reading", "video", "quiz", "test", "mock_exam"] as const;
+const recentProduct = products.find((product) => product.id !== editProduct?.id);
+const selectedProductType = editProduct?.product_type ?? requestedProductType;
+const durationDefaults: Record<string, number> = { audio: 30, ebook: 60, reading: 15, video: 20, quiz: 10, test: 30, mock_exam: 60 };
+const suggestedSubject = editProduct?.subject ?? recentProduct?.subject ?? "";
+const suggestedAudience = editProduct?.audience ?? recentProduct?.audience ?? "";
+const suggestedDuration = editProduct?.estimated_minutes ?? durationDefaults[selectedProductType] ?? 20;
 ---
 <BaseLayout title="Create learning content — PencilScope" description="Create a course, ebook, assessment, video, audio lesson or reading material.">
   <section class="creator-hub-hero">
@@ -47,7 +55,7 @@ const editorProductTypes = editProduct && !primaryStandaloneTypes.includes(editP
       <a class="back-link" href="/dashboard?workspace=creation">← My Creations</a>
       <span class="eyebrow">Creator hub</span><h1>What would you like to create?</h1>
       <p>Choose a format and start creating. Courses can combine classes, videos, ebooks, assessments and reading materials into one priced offer.</p>
-      <nav class="unified-create-menu" aria-label="Choose product type">{creatorProductCatalogue.map((product) => <a class:list={{ active: product.href.includes(`type=${requestedProductType}`) }} href={product.href}><ProductIcon name={product.key} /><strong>{product.label}</strong><small>{product.shortDescription}</small></a>)}</nav>
+
     </div>
   </section>
 
@@ -55,43 +63,58 @@ const editorProductTypes = editProduct && !primaryStandaloneTypes.includes(editP
     <main class="panel create-product-panel">
       <div class="create-panel-heading"><div><span class="eyebrow">Learning product</span><h2>{editProduct ? `Edit ${editProduct.title}` : `Create ${learningProductMeta[requestedProductType].label.toLowerCase()}`}</h2></div><CreateWithAI compact /></div>
       {editId && !editProduct && <p class="form-error">That product is unavailable or you do not have permission to edit it.</p>}
-      <form class="stack-form product-create-form" data-edit-id={editProduct?.id ?? ""} data-library-item-id={selectedLibraryItem?.id ?? ""} data-questions={JSON.stringify(editProduct?.questions ?? [])}>
-        <div class="product-type-picker">
-          {editorProductTypes.map((type) => <label>
-            <input type="radio" name="productType" value={type} checked={editProduct ? editProduct.product_type === type : type === requestedProductType} disabled={Boolean(editProduct && editProduct.product_type !== type)} />
-            <span class="product-symbol">{learningProductMeta[type].symbol}</span>
-            <strong>{learningProductMeta[type].label}</strong><small>{learningProductMeta[type].description}</small>
-          </label>)}
-        </div>
-        <div class="form-columns">
-          <label>Title<input name="title" required minlength="3" maxlength="140" placeholder="A clear, useful title" value={editProduct?.title ?? ""} /></label>
-          <label>Topic<input name="subject" required maxlength="120" placeholder="Mathematics, design, leadership…" value={editProduct?.subject ?? ""} /></label>
-          <label>Audience<input name="audience" required maxlength="120" placeholder="Beginners, Secondary 4, managers…" value={editProduct?.audience ?? ""} /></label>
-          <label>Estimated time (minutes)<input name="estimatedMinutes" type="number" min="1" max="10000" value={editProduct?.estimated_minutes ?? 20} required /></label>
-        </div>
-        <label>Description<textarea name="description" required minlength="20" maxlength="2000" rows="4" placeholder="What will someone learn or be able to practise?">{editProduct?.description ?? ""}</textarea></label>
+      <form class="stack-form product-create-form" data-edit-id={editProduct?.id ?? ""} data-library-item-id={selectedLibraryItem?.id ?? ""} data-questions={JSON.stringify(editProduct?.questions ?? [])} novalidate>
+        <ol class="product-stepper" aria-label="Product creation progress">
+          {["Format", "Details", "Content", "Review"].map((label, index) => <li data-step-item={index + 1}><button type="button" data-step-target={index + 1}><span>{index + 1}</span><strong>{label}</strong></button></li>)}
+        </ol>
+        <p class="stepper-save-status" aria-live="polite">{editProduct ? "Draft loaded. Changes stay private until you publish." : "Your first draft will be saved after product details."}</p>
 
-        <section class="resource-fields">
-          {selectedLibraryItem && <p class="library-selection-banner"><span aria-hidden="true">▦</span><span><strong>Using {selectedLibraryItem.title}</strong><small>Private Content Library · {selectedLibraryItem.mediaType}</small></span><a href="/content-library">Change</a></p>}
-          <label>Content link<input name="contentUrl" type="url" placeholder="https://…" value={editProduct?.content_url ?? (selectedLibraryItem?.contentUrl ? new URL(selectedLibraryItem.contentUrl, Astro.url.origin).toString() : "")} /></label>
-          <p class="form-message">Choose a private source from your Content Library or link to trusted hosting. Access remains restricted to authorised learners.</p>
-          {!selectedLibraryItem && <a class="button button-small button-secondary content-library-picker" href="/content-library">Choose from Content Library</a>}
-        </section>
-
-        <section class="assessment-fields" hidden>
-          <div class="form-columns">
-            <label>Pass mark %<input name="passingScore" type="number" min="0" max="100" value={editProduct?.passing_score ?? 50} /></label>
-            <label>Time limit (minutes)<input name="timeLimitMinutes" type="number" min="1" value={editProduct?.time_limit_minutes ?? 20} /></label>
+        <section class="product-step-panel" data-step-panel="1">
+          <div class="product-step-heading"><span class="eyebrow">Step 1 of 4</span><h3>Choose the product format</h3><p>Select the experience learners will use. The fields in the next steps adapt to this choice.</p></div>
+          <div class="product-type-picker">
+            {editorProductTypes.map((type) => <label>
+              <input type="radio" name="productType" value={type} checked={editProduct ? editProduct.product_type === type : type === requestedProductType} disabled={Boolean(editProduct && editProduct.product_type !== type)} />
+              <span class="product-symbol">{learningProductMeta[type].symbol}</span>
+              <strong>{learningProductMeta[type].label}</strong><small>{learningProductMeta[type].description}</small>
+            </label>)}
           </div>
-          <div class="question-builder-heading"><div><span class="eyebrow">Question builder</span><h3>Build the assessment</h3></div><button class="button button-small button-secondary add-question" type="button">＋ Add question</button></div>
-          <div class="standalone-question-builder"></div>
+          <div class="product-step-actions"><span></span><button class="button" type="button" data-step-next>Continue to details</button></div>
         </section>
 
-        <div class="create-actions">
-          <button class="button button-secondary" type="submit" value="draft">{editProduct ? "Save changes" : "Save draft"}</button>
-          {editProduct?.status !== "published" && <button class="button" type="submit" value="published">Publish now</button>}
-          {editProduct && <a class="text-link" href="/create#create-product">Cancel editing</a>}
-        </div>
+        <section class="product-step-panel" data-step-panel="2" hidden>
+          <div class="product-step-heading"><span class="eyebrow">Step 2 of 4</span><h3>Add the essentials</h3><p>Tell learners what this is and who it is for. We save it privately when you continue.</p></div>
+          <div class="form-columns">
+            <label>Title<input name="title" required minlength="3" maxlength="140" placeholder="A clear, useful title" value={editProduct?.title ?? ""} /></label>
+            <label>Topic<input name="subject" required maxlength="120" placeholder="For example: Leadership" value={suggestedSubject} /><small>Pre-filled from your recent work when available.</small></label>
+            <label>For<input name="audience" required maxlength="120" placeholder="For example: New managers" value={suggestedAudience} /><small>Who will benefit most?</small></label>
+            <label>Length in minutes<input name="estimatedMinutes" type="number" min="1" max="10000" value={suggestedDuration} required /><small>Suggested for this format; change if needed.</small></label>
+          </div>
+          <label>What learners will gain<textarea name="description" required minlength="20" maxlength="2000" rows="4" placeholder="After this, learners will be able to…">{editProduct?.description ?? ""}</textarea></label>
+          <div class="product-step-actions"><button class="button button-secondary" type="button" data-step-back>Back</button><div><button class="text-link" type="button" data-save-exit>Save and exit</button><button class="button" type="button" data-step-next>Save draft and add content</button></div></div>
+        </section>
+
+        <section class="product-step-panel" data-step-panel="3" hidden>
+          <div class="product-step-heading"><span class="eyebrow">Step 3 of 4</span><h3>Add the learning content</h3><p>Choose a file from your private library or provide one trusted content link.</p></div>
+          <section class="resource-fields">
+            {selectedLibraryItem && <p class="library-selection-banner"><span aria-hidden="true">▦</span><span><strong>Using {selectedLibraryItem.title}</strong><small>Private Content Library · {selectedLibraryItem.mediaType}</small></span><a href="/content-library">Change</a></p>}
+            <label>Content URL <small>Use this only when the content is hosted elsewhere.</small><input name="contentUrl" type="url" placeholder="https://…" value={editProduct?.content_url ?? (selectedLibraryItem?.contentUrl ? new URL(selectedLibraryItem.contentUrl, Astro.url.origin).toString() : "")} /></label>
+            <p class="form-message">Choose one source. Content Library files remain private to authorised learners.</p>
+            {!selectedLibraryItem && <a class="button button-small button-secondary content-library-picker" href="/content-library">Choose from Content Library</a>}
+          </section>
+          <section class="assessment-fields" hidden>
+            <details class="assessment-options"><summary>Scoring and time limit</summary><div class="form-columns"><label>Pass mark %<input name="passingScore" type="number" min="0" max="100" value={editProduct?.passing_score ?? 50} /></label><label>Time limit in minutes<input name="timeLimitMinutes" type="number" min="1" value={editProduct?.time_limit_minutes ?? 20} /></label></div></details>
+            <div class="question-builder-heading"><div><span class="eyebrow">Question builder</span><h3>Build the assessment</h3></div><button class="button button-small button-secondary add-question" type="button">＋ Add question</button></div>
+            <div class="standalone-question-builder"></div>
+          </section>
+          <div class="product-step-actions"><button class="button button-secondary" type="button" data-step-back>Back</button><div><button class="text-link" type="button" data-save-exit>Save and exit</button><button class="button" type="button" data-step-next>Save content and review</button></div></div>
+        </section>
+
+        <section class="product-step-panel" data-step-panel="4" hidden>
+          <div class="product-step-heading"><span class="eyebrow">Step 4 of 4</span><h3>Review and finish your content</h3><p>Confirm the learner-facing content. No pricing is needed while creating a product.</p></div>
+          <div class="product-review-card"><div><span>Format</span><strong data-review="type"></strong></div><div><span>Title</span><strong data-review="title"></strong></div><div><span>Topic</span><strong data-review="subject"></strong></div><div><span>Audience</span><strong data-review="audience"></strong></div><div><span>Estimated time</span><strong data-review="duration"></strong></div><div><span>Content readiness</span><strong data-review="content"></strong></div></div>
+          <div class="publish-assurance"><strong>Content first</strong><p>Your content stays private until Pricing & Publish is completed. Save it now, then configure one price or include it in a bundle when you are ready.</p></div>
+          <div class="product-step-actions"><button class="button button-secondary" type="button" data-step-back>Back</button><div><button class="button button-secondary" type="submit" value="draft">Save draft</button><button class="button" type="submit" value="draft" data-pricing-next>Save content and open Pricing & Publish</button></div></div>
+        </section>
         <p class="form-message create-product-message" aria-live="polite"></p>
       </form>
     </main>
@@ -104,11 +127,11 @@ const editorProductTypes = editProduct && !primaryStandaloneTypes.includes(editP
         {!products.length && <div class="creator-empty-state"><span class="product-symbol">＋</span><strong>Create your first {requestedProductLabel} and sell it</strong><p>Use the form to build the content, then include it in a priced offer and publish it for learners.</p></div>}
         <div class="creator-product-cards">{visibleProducts.map((product) => {
           const meta = learningProductMeta[product.product_type];
-          const displayStatus = productDisplayStatus(product);
+          const displayStatus = productStatusLabel(product);
           return <article><ProductIcon name={productCatalogueKey(product.product_type)} size="small" /><div><a class="content-title-link" href={`/dashboard?workspace=creation&section=product&productId=${product.id}`}><strong>{product.title}</strong></a><small>{meta.label} · {displayStatus} · version {product.content_version ?? 1}</small><code class="product-id">ID {product.id}</code></div>
             <a class="text-link" href={`/dashboard?workspace=creation&section=product&productId=${product.id}`}>Dashboard</a>
             {product.status === "draft" && <a class="text-link" href={`/create?edit=${product.id}#create-product`}>Edit</a>}
-            {product.status === "draft" && <button class="text-link publish-product" data-id={product.id}>Publish</button>}
+            {product.status === "draft" && <button class="text-link publish-product" data-id={product.id}>Mark content ready</button>}
             {product.status === "draft" && <button class="text-link danger-link delete-product" data-id={product.id}>Delete draft</button>}
             {product.status === "published" && <button class="text-link copy-product" data-id={product.id}>New version</button>}
             {product.status === "published" && product.listing_status !== "unpublished" && <button class="text-link lifecycle-product" data-id={product.id} data-action="unpublish">Unpublish</button>}
@@ -150,7 +173,11 @@ const editorProductTypes = editProduct && !primaryStandaloneTypes.includes(editP
   const assessmentFields = document.querySelector<HTMLElement>(".assessment-fields");
   const questionBuilder = document.querySelector<HTMLElement>(".standalone-question-builder");
   const template = document.querySelector<HTMLTemplateElement>("#question-template");
+  const message = form?.querySelector<HTMLElement>(".create-product-message");
+  const saveStatus = form?.querySelector<HTMLElement>(".stepper-save-status");
   const assessmentTypes = new Set(["quiz", "test", "mock_exam"]);
+  let currentStep = form?.dataset.editId ? 2 : 1;
+  let highestStep = currentStep;
 
   function renumberQuestions() {
     questionBuilder?.querySelectorAll<HTMLElement>(".standalone-question-editor").forEach((editor, index) => {
@@ -169,9 +196,7 @@ const editorProductTypes = editProduct && !primaryStandaloneTypes.includes(editP
     if (editor && question) {
       editor.dataset.questionId = question.id ?? "";
       (editor.querySelector('[data-field="prompt"]') as HTMLTextAreaElement).value = question.prompt ?? "";
-      editor.querySelectorAll<HTMLInputElement>("[data-option]").forEach((input, index) => {
-        input.value = question.options?.[index] ?? "";
-      });
+      editor.querySelectorAll<HTMLInputElement>("[data-option]").forEach((input, index) => { input.value = question.options?.[index] ?? ""; });
       (editor.querySelector('[data-field="correctIndex"]') as unknown as HTMLSelectElement).value = String(question.correctIndex ?? 0);
       (editor.querySelector('[data-field="explanation"]') as HTMLTextAreaElement).value = question.explanation ?? "";
       (editor.querySelector('[data-field="mediaLibraryItemId"]') as unknown as HTMLSelectElement).value = question.media?.libraryItemId ?? "";
@@ -190,84 +215,126 @@ const editorProductTypes = editProduct && !primaryStandaloneTypes.includes(editP
     if (contentUrl) contentUrl.required = !assessment;
     if (assessment && !questionBuilder?.children.length) addQuestion();
   }
-  typeInputs.forEach((input) => input.addEventListener("change", updateTypeFields));
-  document.querySelector(".add-question")?.addEventListener("click", () => addQuestion());
-  const savedQuestions = (() => {
-    try { return JSON.parse(form?.dataset.questions ?? "[]") as Array<{ id?: string; prompt?: string; options?: string[]; correctIndex?: number; explanation?: string; media?: { libraryItemId?: string; altText?: string; caption?: string } }>; }
-    catch { return []; }
-  })();
-  savedQuestions.forEach((question) => addQuestion(question));
-  updateTypeFields();
-
-  form?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const submitter = event.submitter as HTMLButtonElement | null;
-    const data = new FormData(form);
-    const productType = String(data.get("productType") ?? "");
-    const questions = [...form.querySelectorAll<HTMLElement>(".standalone-question-editor")].map((editor) => ({
+  function questionsPayload() {
+    return [...(form?.querySelectorAll<HTMLElement>(".standalone-question-editor") ?? [])].map((editor) => ({
       id: editor.dataset.questionId || undefined,
       prompt: (editor.querySelector('[data-field="prompt"]') as HTMLTextAreaElement).value,
       options: [...editor.querySelectorAll<HTMLInputElement>("[data-option]")].map((input) => input.value).filter(Boolean),
-      correctIndex: Number((editor.querySelector('[data-field="correctIndex"]') as unknown as { value?: string } | null)?.value ?? 0),
+      correctIndex: Number((editor.querySelector('[data-field="correctIndex"]') as unknown as HTMLSelectElement).value ?? 0),
       explanation: (editor.querySelector('[data-field="explanation"]') as HTMLTextAreaElement).value,
       mediaLibraryItemId: (editor.querySelector('[data-field="mediaLibraryItemId"]') as unknown as HTMLSelectElement).value,
       mediaAltText: (editor.querySelector('[data-field="mediaAltText"]') as HTMLInputElement).value,
       mediaCaption: (editor.querySelector('[data-field="mediaCaption"]') as HTMLTextAreaElement).value
     }));
-    const payload = {
-      productType,
-      title: data.get("title"),
-      subject: data.get("subject"),
-      audience: data.get("audience"),
-      estimatedMinutes: Number(data.get("estimatedMinutes")),
-      description: data.get("description"),
-      contentUrl: data.get("contentUrl"),
-      passingScore: Number(data.get("passingScore")),
-      timeLimitMinutes: Number(data.get("timeLimitMinutes")),
-      questions,
-      status: submitter?.value === "published" ? "published" : "draft"
+  }
+  function payload(metadataOnly = false) {
+    const data = new FormData(form!);
+    return {
+      productType: String(data.get("productType") ?? ""), title: data.get("title"), subject: data.get("subject"),
+      audience: data.get("audience"), estimatedMinutes: Number(data.get("estimatedMinutes")), description: data.get("description"),
+      contentUrl: data.get("contentUrl"), primaryLibraryItemId: form?.dataset.libraryItemId || undefined,
+      passingScore: Number(data.get("passingScore")), timeLimitMinutes: Number(data.get("timeLimitMinutes")),
+      questions: questionsPayload(), status: "draft", metadataOnly
     };
-    const buttons = [...form.querySelectorAll<HTMLButtonElement>('button[type="submit"]')];
-    buttons.forEach((button) => button.disabled = true);
-    const message = form.querySelector<HTMLElement>(".create-product-message");
-    const editId = form.dataset.editId;
-    const response = await fetch(editId ? `/api/creator/learning-products/${encodeURIComponent(editId)}` : "/api/creator/learning-products", {
-      method: editId ? "PATCH" : "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
+  }
+  function setMessage(text: string, ok = true) {
+    if (message) { message.className = `${ok ? "form-success" : "form-error"} create-product-message`; message.textContent = text; }
+  }
+  function showStep(step: number, preserveViewport = true) {
+    const previousTop = preserveViewport && form ? form.getBoundingClientRect().top : null;
+    currentStep = Math.max(1, Math.min(4, step));
+    form?.querySelectorAll<HTMLElement>("[data-step-panel]").forEach((panel) => { panel.hidden = Number(panel.dataset.stepPanel) !== currentStep; });
+    form?.querySelectorAll<HTMLElement>("[data-step-item]").forEach((item) => {
+      const value = Number(item.dataset.stepItem);
+      item.classList.toggle("active", value === currentStep);
+      item.classList.toggle("complete", value < currentStep || value < highestStep);
+      const button = item.querySelector<HTMLButtonElement>("button");
+      if (button) button.disabled = value > highestStep;
     });
-    const result = await response.json().catch(() => ({})) as { error?: { message?: string }; product?: { id?: string; slug: string; status: string } };
-    if (message) {
-      message.className = response.ok ? "form-success create-product-message" : "form-error create-product-message";
-      message.textContent = response.ok
-        ? result.product?.status === "published" ? "Published. Opening the product page…" : "Draft saved. Refreshing your creator hub…"
-        : result.error?.message ?? "The learning product could not be saved.";
-    }
-    if (response.ok) {
-      const libraryItemId = form.dataset.libraryItemId;
-      const savedProductId = editId || result.product?.id;
-      if (libraryItemId && savedProductId) {
-        await fetch("/api/creator/content-library/items/" + encodeURIComponent(libraryItemId) + "/usages", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ entityType: "learning_product", entityId: savedProductId, usageLabel: String(data.get("title") ?? "") })
-        });
-      }
-      if (editId && submitter?.value === "published" && result.product?.status !== "published") {
-        await fetch(`/api/creator/learning-products/${encodeURIComponent(editId)}/publish`, { method: "POST" });
-      }
-      if (editId && submitter?.value !== "published") {
-        buttons.forEach((button) => button.disabled = false);
-        return;
-      }
-      window.location.href = result.product?.status === "published" && result.product.slug
-        ? `/library/${result.product.slug}`
-        : result.product?.id ? `/create?edit=${encodeURIComponent(result.product.id)}#create-product` : "/create#create-product";
+    if (currentStep === 4) updateReview();
+    const url = new URL(window.location.href); url.searchParams.set("step", String(currentStep)); history.replaceState({}, "", url);
+    requestAnimationFrame(() => {
+      if (previousTop !== null && form) window.scrollBy(0, form.getBoundingClientRect().top - previousTop);
+      const heading = form?.querySelector<HTMLElement>(`[data-step-panel="${currentStep}"] .product-step-heading`);
+      heading?.setAttribute("tabindex", "-1");
+      heading?.focus({ preventScroll: true });
+    });
+  }
+  function validateStep(step: number) {
+    const panel = form?.querySelector<HTMLElement>(`[data-step-panel="${step}"]`);
+    const invalid = panel?.querySelector<HTMLElement>(":invalid") as unknown as (HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null);
+    if (invalid) { invalid.reportValidity(); invalid.focus({ preventScroll: true }); invalid.scrollIntoView({ behavior: "smooth", block: "center" }); return false; }
+    return true;
+  }
+  function updateReview() {
+    if (!form) return;
+    const data = new FormData(form);
+    const selectedType = typeInputs.find((input) => input.checked);
+    const values: Record<string, string> = {
+      type: selectedType?.closest("label")?.querySelector("strong")?.textContent ?? "—",
+      title: String(data.get("title") ?? "—"), subject: String(data.get("subject") ?? "—"), audience: String(data.get("audience") ?? "—"),
+      duration: `${String(data.get("estimatedMinutes") ?? "0")} minutes`,
+      content: assessmentTypes.has(String(data.get("productType"))) ? `${questionsPayload().length} question${questionsPayload().length === 1 ? "" : "s"}` : (String(data.get("contentUrl") ?? "").trim() || form.dataset.libraryItemId ? "Content source added" : "Content source required")
+    };
+    Object.entries(values).forEach(([key, value]) => { const target = form.querySelector<HTMLElement>(`[data-review="${key}"]`); if (target) target.textContent = value; });
+  }
+  async function saveProduct(metadataOnly: boolean) {
+    if (!form) return null;
+    const editId = form.dataset.editId;
+    const buttons = [...form.querySelectorAll<HTMLButtonElement>("[data-step-panel]:not([hidden]) button")]; buttons.forEach((button) => button.disabled = true);
+    if (saveStatus) saveStatus.textContent = "Saving your private draft…";
+    const response = await fetch(editId ? `/api/creator/learning-products/${encodeURIComponent(editId)}` : "/api/creator/learning-products", {
+      method: editId ? "PATCH" : "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload(metadataOnly))
+    });
+    const result = await response.json().catch(() => ({})) as { error?: { message?: string }; product?: { id?: string; slug?: string; status?: string } };
+    buttons.forEach((button) => button.disabled = false);
+    if (!response.ok || !result.product?.id) { setMessage(result.error?.message ?? "The learning product could not be saved.", false); if (saveStatus) saveStatus.textContent = "Draft not saved. Check the highlighted information."; return null; }
+    form.dataset.editId = result.product.id;
+    const url = new URL(window.location.href); url.searchParams.set("edit", result.product.id); history.replaceState({}, "", url);
+    if (saveStatus) saveStatus.textContent = `Private draft saved at ${new Date().toLocaleTimeString("en-SG", { hour: "2-digit", minute: "2-digit" })}.`;
+    setMessage("Private draft saved. You can leave and resume it at any time.");
+    return result.product;
+  }
+
+  typeInputs.forEach((input) => input.addEventListener("change", updateTypeFields));
+  document.querySelector(".add-question")?.addEventListener("click", () => addQuestion());
+  const savedQuestions = (() => { try { return JSON.parse(form?.dataset.questions ?? "[]") as Array<{ id?: string; prompt?: string; options?: string[]; correctIndex?: number; explanation?: string; media?: { libraryItemId?: string; altText?: string; caption?: string } }>; } catch { return []; } })();
+  savedQuestions.forEach((question) => addQuestion(question));
+  updateTypeFields();
+  const requestedStep = Number(new URL(window.location.href).searchParams.get("step"));
+  if (form?.dataset.editId && requestedStep >= 1 && requestedStep <= 4) { currentStep = requestedStep; highestStep = 4; }
+  showStep(currentStep, false);
+
+  form?.querySelectorAll<HTMLButtonElement>("[data-step-target]").forEach((button) => button.addEventListener("click", () => showStep(Number(button.dataset.stepTarget))));
+  form?.querySelectorAll<HTMLButtonElement>("[data-step-back]").forEach((button) => button.addEventListener("click", () => showStep(currentStep - 1)));
+  form?.querySelectorAll<HTMLButtonElement>("[data-step-next]").forEach((button) => button.addEventListener("click", async () => {
+    if (!validateStep(currentStep)) return;
+    if (currentStep === 2 && !await saveProduct(true)) return;
+    if (currentStep === 3 && !await saveProduct(false)) return;
+    highestStep = Math.max(highestStep, currentStep + 1); showStep(currentStep + 1);
+  }));
+  form?.querySelectorAll<HTMLButtonElement>("[data-save-exit]").forEach((button) => button.addEventListener("click", async () => {
+    if (!validateStep(Math.min(currentStep, 2))) return;
+    if (currentStep === 3 && !validateStep(3)) return;
+    const saved = await saveProduct(currentStep < 3); if (saved?.id) window.location.href = `/dashboard?workspace=creation&section=product&productId=${encodeURIComponent(saved.id)}`;
+  }));
+
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const detailsValid = validateStep(2);
+    if (!detailsValid) { showStep(2); return; }
+    const contentValid = validateStep(3);
+    if (!contentValid) { showStep(3); return; }
+    const submitter = event.submitter as HTMLButtonElement | null;
+    const saved = await saveProduct(false); if (!saved?.id) return;
+    if (submitter?.dataset.pricingNext !== undefined) {
+      setMessage("Draft saved. Opening bundles and pricing…");
+      window.location.href = `/dashboard?workspace=creation&section=product&productId=${encodeURIComponent(saved.id)}&tab=offers`;
       return;
     }
-    buttons.forEach((button) => button.disabled = false);
+    setMessage("Draft saved. Pricing and publication can be completed later from the product workspace.");
+    if (saveStatus) saveStatus.textContent = "All changes saved. This product is still private.";
   });
-
   document.querySelectorAll<HTMLButtonElement>(".publish-product").forEach((button) => {
     button.addEventListener("click", async () => {
       button.disabled = true;

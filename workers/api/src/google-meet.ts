@@ -206,6 +206,36 @@ export async function createGoogleMeetForSession(env: ApiEnvironment, input: {
   return { eventId: event.id, meetingUrl, meetingCode: event.conferenceData?.conferenceId ?? null };
 }
 
+export async function updateGoogleMeetForSession(env: ApiEnvironment, input: {
+  ownerUserId: string;
+  eventId: string;
+  title: string;
+  description: string;
+  startsAt: string;
+  endsAt: string;
+  timezone: string;
+}): Promise<void> {
+  const row = await integration(env, input.ownerUserId);
+  if (!row) throw new Error("The course owner must reconnect Google Calendar before changing this online session.");
+  const token = await accessToken(env, row);
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(input.eventId)}?sendUpdates=all`,
+    {
+      method: "PATCH",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        summary: input.title,
+        description: input.description,
+        start: { dateTime: input.startsAt, timeZone: input.timezone },
+        end: { dateTime: input.endsAt, timeZone: input.timezone }
+      })
+    }
+  );
+  if (!response.ok) {
+    const payload: { error?: { message?: string } } = await response.json<{ error?: { message?: string } }>().catch(() => ({}));
+    throw new Error(payload.error?.message ?? "Google Calendar could not update this session.");
+  }
+}
 async function syncEventAttendees(env: ApiEnvironment, session: {
   google_calendar_event_id: string; tutor_id: string;
 }): Promise<void> {

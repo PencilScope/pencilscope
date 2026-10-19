@@ -1,11 +1,14 @@
 import { env as cloudflareEnv } from "cloudflare:workers";
 import type { CourseSummary } from "@/lib/courses";
 import type { LearningProduct } from "@/lib/learning-products";
+import type { MarketplaceOffer, MarketplaceOfferItem } from "@/lib/offers";
 
 type CourseListResponse = { courses: CourseSummary[] };
 type CourseResponse = { course: CourseSummary };
 type LearningProductListResponse = { products: LearningProduct[] };
 type LearningProductResponse = { product: LearningProduct };
+type OfferListResponse = { offers: MarketplaceOffer[] };
+type OfferResponse = { offer: MarketplaceOffer; items: MarketplaceOfferItem[] };
 
 export type ApiRequestOptions = {
   userId?: string;
@@ -70,6 +73,37 @@ export async function findLearningProductBySlug(slug: string, userId?: string): 
     return (await response.json<LearningProductResponse>()).product;
   } catch (error) {
     console.warn("learning-product.api.unavailable", { slug, error });
+    return undefined;
+  }
+}
+
+export async function listPublishedOffers(filters: { q?: string; type?: string; kind?: string; topic?: string; delivery?: string; availability?: string; sort?: string } = {}): Promise<MarketplaceOffer[]> {
+  try {
+    const query = new URLSearchParams();
+    if (filters.q) query.set("q", filters.q);
+    if (filters.type) query.set("type", filters.type);
+    if (filters.kind) query.set("kind", filters.kind);
+    if (filters.topic) query.set("topic", filters.topic);
+    if (filters.delivery) query.set("delivery", filters.delivery);
+    if (filters.availability) query.set("availability", filters.availability);
+    if (filters.sort) query.set("sort", filters.sort);
+    const response = await requestApi(`/api/offers${query.size ? `?${query}` : ""}`);
+    if (!response.ok) throw new Error(`Offer API returned ${response.status}`);
+    return (await response.json<OfferListResponse>()).offers;
+  } catch (error) {
+    console.warn("offers.api.unavailable", { error });
+    return [];
+  }
+}
+
+export async function findPublishedOffer(slug: string): Promise<OfferResponse | undefined> {
+  try {
+    const response = await requestApi(`/api/offers/${encodeURIComponent(slug)}`);
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw new Error(`Offer API returned ${response.status}`);
+    return response.json<OfferResponse>();
+  } catch (error) {
+    console.warn("offer.api.unavailable", { slug, error });
     return undefined;
   }
 }

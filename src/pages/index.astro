@@ -1,18 +1,17 @@
 ---
-import CourseCard from "@/components/CourseCard.astro";
+import OfferCard from "@/components/OfferCard.astro";
 import BaseLayout from "@/layouts/BaseLayout.astro";
-import { listPublishedCourses } from "@/lib/api-client";
+import { listPublishedOffers } from "@/lib/api-client";
 
-const courses = await listPublishedCourses();
+const offers = await listPublishedOffers();
 const searchQuery = Astro.url.searchParams.get("q")?.trim() ?? "";
 const normalizedQuery = searchQuery.toLocaleLowerCase();
-const matchingCourses = normalizedQuery
-  ? courses.filter((course) => [
-      course.title, course.description, course.subject, course.level, course.tutorName,
-      course.deliveryMode, ...course.categories, ...course.features
+const matchingOffers = normalizedQuery
+  ? offers.filter((offer) => [
+      offer.title, offer.description, offer.creatorName, offer.deliveryMode, ...offer.formats, ...offer.topics, ...offer.includedTitles
     ].join(" ").toLocaleLowerCase().includes(normalizedQuery))
-  : courses;
-const featuredCourses = matchingCourses.slice(0, 6);
+  : offers;
+const featuredOffers = matchingOffers.slice(0, 6);
 const learningSteps = [
   { number: "01", title: "Discover", copy: "Explore courses and see the formats, activities and resources included before you book." },
   { number: "02", title: "Book", copy: "Choose the offering, schedule and delivery format that fit your life." },
@@ -39,17 +38,17 @@ const capabilities = [
   <section class="course-first-section">
     <div class="shell">
       <div class="course-first-heading">
-        <div><span class="eyebrow">Explore courses</span><h2>Find what you want to learn.</h2></div>
+        <div><span class="eyebrow">Explore learning</span><h2>Find what you want to learn.</h2></div>
         <form class="course-search" action="/" method="get" role="search">
-          <label class="sr-only" for="landing-course-search">Search courses</label>
-          <input id="landing-course-search" name="q" type="search" value={searchQuery} placeholder="Search by course, topic, audience or creator" />
+          <label class="sr-only" for="landing-course-search">Search learning offers</label>
+          <input id="landing-course-search" name="q" type="search" value={searchQuery} placeholder="Search by topic, format or creator" />
           <button class="button" type="submit">Search</button>
         </form>
       </div>
-      <div class="course-search-meta"><span>{matchingCourses.length} {matchingCourses.length === 1 ? "course" : "courses"} found</span>{searchQuery && <a class="text-link" href="/">Clear search</a>}<a class="text-link" href="/courses">View all courses →</a></div>
-      {featuredCourses.length
-        ? <div class="course-grid">{featuredCourses.map((course) => <CourseCard course={course} />)}</div>
-        : <div class="panel course-search-empty"><h2>No courses match “{searchQuery}”.</h2><p>Try a broader topic, audience or learning format.</p><a class="button button-secondary" href="/">Show all courses</a></div>}
+      <div class="course-search-meta"><span>{matchingOffers.length} learning {matchingOffers.length === 1 ? "result" : "results"}</span>{searchQuery && <a class="text-link" href="/">Clear search</a>}<a class="text-link" href="/offers">Explore all learning →</a></div>
+      {featuredOffers.length
+        ? <div class="offer-grid">{featuredOffers.map((offer) => <OfferCard offer={offer} />)}</div>
+        : <div class="panel course-search-empty"><h2>No learning matches “{searchQuery}”.</h2><p>Try a broader topic, creator or learning format.</p><a class="button button-secondary" href="/">Show all learning</a></div>}
     </div>
   </section>
 
@@ -60,8 +59,8 @@ const capabilities = [
         <h1>Knowledge Platform for everyone</h1>
         <p>Learn from curated content created by experts who turn real-world experience into practical knowledge for everyone.</p>
         <div class="hero-actions">
-          <a class="button" href="/library">Explore learning</a>
-          <a class="button button-ghost" href="/register?next=/library"><span class="play">＋</span> Sign up free</a>
+          <a class="button" href="/offers">Explore learning</a>
+          <a class="button button-ghost" href="/register?next=/offers"><span class="play">＋</span> Sign up free</a>
         </div>
         <div class="hero-reassurance"><span>Browse before joining</span><i></i><span>Free learner account</span><i></i><span>Progress stays in one place</span></div>
       </div>

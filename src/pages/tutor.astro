@@ -1,9 +1,9 @@
 ---
 import BaseLayout from "@/layouts/BaseLayout.astro";
 import { requestApi } from "@/lib/api-client";
-import { learningProductMeta, type LearningProductType } from "@/lib/learning-products";
+import { learningProductMeta, type LearningProduct, type LearningProductType } from "@/lib/learning-products";
 import ProductIcon from "@/components/ProductIcon.astro";
-import { courseDeliveryModeForProduct, creatorProductCatalogue } from "@/lib/product-catalog";
+import { courseDeliveryModeForProduct, creatorProductCatalogue, productCatalogueKey } from "@/lib/product-catalog";
 
 const userId = await Astro.session?.get("userId");
 if (typeof userId !== "string") return Astro.redirect("/sign-in");
@@ -13,6 +13,10 @@ const dashboard = await dashboardResponse.json<{
   user: { id: string; role: string; display_name: string };
   creatorCourses?: Array<{ id: string; title: string; status: string; pricing_status: string; enrolment_count: number }>;
 }>();
+const creatorProductsResponse = await requestApi("/api/creator/learning-products", { userId });
+const creatorProducts = creatorProductsResponse.ok
+  ? (await creatorProductsResponse.json<{ products: LearningProduct[] }>()).products
+  : [];
 type AssessmentMediaItem = { id: string; title: string; mediaType: string; itemKind: string; contentUrl: string | null };
 let assessmentMediaItems: AssessmentMediaItem[] = [];
 const libraryResponse = await requestApi("/api/creator/content-library", { userId });
@@ -178,52 +182,85 @@ const readiness = studio ? [
   { label: "No draft assessments", complete: draftAssessmentCount === 0 }
 ] : [];
 const readinessComplete = readiness.filter((item) => item.complete).length;
+const creatorProductCount = (dashboard.creatorCourses?.length ?? 0) + creatorProducts.length;
+const creatorProductStatus = (product: LearningProduct) =>
+  product.status === "published" && product.listing_status === "unpublished" ? "unpublished" : product.status;
+const creatorProductHref = (product: LearningProduct) => product.status === "draft"
+  ? `/create?edit=${encodeURIComponent(product.id)}#create-product`
+  : `/dashboard?workspace=creation&section=product&productId=${encodeURIComponent(product.id)}`;
+const workflowSections: StudioSection[] = ["overview", "curriculum", "offerings", "sessions", "publish"];
+const workflowSection = ["assessments", "resources"].includes(activeSection) ? "curriculum"
+  : ["results", "learners", "team"].includes(activeSection) ? "publish"
+    : activeSection;
+const workflowIndex = Math.max(0, workflowSections.indexOf(workflowSection as StudioSection));
+const previousWorkflowSection = workflowSections[Math.max(0, workflowIndex - 1)];
+const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 1, workflowIndex + 1)];
 ---
 <BaseLayout title="Creator studio — PencilScope">
-  <section class="dashboard-hero"><div class="shell">
-    <a class="back-link" href="/create">← Creator hub</a>
-    <span class="eyebrow">Creator studio</span><h1>Turn what you know into a course.</h1>
-    <p>Create self-paced training, a live cohort, an in-person event, or an academic term. Mix recorded lessons, online sessions, venues, materials and assessments.</p>
+  <section class="dashboard-hero studio-hero"><div class="shell">
+    <nav class="creator-breadcrumb" aria-label="Breadcrumb"><a href="/dashboard?workspace=creation">Creator Hub</a><span aria-hidden="true">›</span><span>Creator Studio</span>{studio && <><span aria-hidden="true">›</span><strong>{studio.course.title}</strong></>}</nav>
+    <span class="eyebrow">Creator studio</span><h1>Create what you know. Empower others.</h1>
+    <p>Build, price and publish learning products from one focused workspace.</p>
   </div></section>
   <section class="shell studio-layout">
     <aside class="panel studio-sidebar">
-      <div class="studio-sidebar-heading"><span class="eyebrow">Workspace</span><h2>Courses</h2></div>
-      <nav class="studio-course-list">
-        {dashboard.creatorCourses?.map((course) => (
-          <a class:list={{ active: course.id === selectedId }} href={`/tutor?courseId=${course.id}&section=overview`}>
-            <strong>{course.title}</strong><small>{course.status} · {course.pricing_status}</small>
-          </a>
-        ))}
-      </nav>
-      {studio && <nav class="studio-module-nav" aria-label="Course studio sections">
-        <a class:list={{ active: activeSection === "overview" }} href={studioUrl("overview")}><span>Overview</span><small>{readinessComplete}/{readiness.length} ready</small></a>
-        <a class:list={{ active: activeSection === "offerings" }} href={studioUrl("offerings")}><span>Price & enrolment</span><small>{studio.offerings.length}</small></a>
-        <a class:list={{ active: activeSection === "curriculum" }} href={studioUrl("curriculum")}><span>Build content</span><small>{studio.modules.length} modules · {studio.lessons.length} lessons</small></a>
-        <a class:list={{ active: activeSection === "assessments" }} href={studioUrl("assessments")}><span>Assessments</span><small>{studio.assessments.length}{draftAssessmentCount ? ` · ${draftAssessmentCount} draft` : ""}</small></a>
-        <a class:list={{ active: activeSection === "results" }} href={studioUrl("results")}><span>Insights</span><small>{resultAttempts.length} attempts</small></a>
-        <a class:list={{ active: activeSection === "resources" }} href={studioUrl("resources")}><span>Resources</span><small>{studio.materials.length + studio.flashcardDecks.length}</small></a>
-        <a class:list={{ active: activeSection === "sessions" }} href={studioUrl("sessions")}><span>Schedule</span><small>{studio.sessions.length}</small></a>
-        <a class:list={{ active: activeSection === "learners" }} href={studioUrl("learners")}><span>Learners</span><small>{invitations.length}</small></a>
-        <a class:list={{ active: activeSection === "team" }} href={studioUrl("team")}><span>Team</span><small>{team.filter((member) => member.status === "active").length}</small></a>
-        <a class:list={{ active: activeSection === "publish" }} href={studioUrl("publish")}><span>Review & publish</span><small>{studio.course.status}</small></a>
-      </nav>}
-      <a class:list={["studio-new-course", { active: createMode }]} href="/tutor?mode=new"><span>＋</span><strong>Create course</strong><small>Open the course form</small></a>
+      {studio ? <>
+        <a class="studio-products-back" href="/tutor"><span aria-hidden="true">←</span><span><strong>My Products</strong><small>{creatorProductCount} created</small></span></a>
+        <div class="studio-sidebar-heading studio-selected-product"><span class="eyebrow">Course workspace</span><h2>{studio.course.title}</h2><p>{studio.course.delivery_mode.replaceAll("-", " ")} · {studio.course.status === "published" && studio.course.listing_status !== "listed" ? "unpublished" : studio.course.status}</p></div>
+        <nav class="studio-module-nav" aria-label="Course studio sections">
+          <a class:list={{ active: activeSection === "overview" }} href={studioUrl("overview")}><span>Overview</span><small>{readinessComplete}/{readiness.length} ready</small></a>
+          <a class:list={{ active: activeSection === "curriculum" }} href={studioUrl("curriculum")}><span>Build content</span><small>{studio.modules.length} modules · {studio.lessons.length} lessons</small></a>
+          <a class:list={{ active: activeSection === "assessments" }} href={studioUrl("assessments")}><span>Assessments</span><small>{studio.assessments.length}{draftAssessmentCount ? ` · ${draftAssessmentCount} draft` : ""}</small></a>
+          <a class:list={{ active: activeSection === "resources" }} href={studioUrl("resources")}><span>Resources</span><small>{studio.materials.length + studio.flashcardDecks.length}</small></a>
+          <a class:list={{ active: activeSection === "offerings" }} href={studioUrl("offerings")}><span>Price & enrolment</span><small>{studio.offerings.length}</small></a>
+          <a class:list={{ active: activeSection === "sessions" }} href={studioUrl("sessions")}><span>Schedule</span><small>{studio.sessions.length}</small></a>
+          <a class:list={{ active: activeSection === "learners" }} href={studioUrl("learners")}><span>Learners</span><small>{invitations.length}</small></a>
+          <a class:list={{ active: activeSection === "results" }} href={studioUrl("results")}><span>Insights</span><small>{resultAttempts.length} attempts</small></a>
+          <a class:list={{ active: activeSection === "team" }} href={studioUrl("team")}><span>Team</span><small>{team.filter((member) => member.status === "active").length}</small></a>
+          <a class:list={{ active: activeSection === "publish" }} href={studioUrl("publish")}><span>Review & publish</span><small>{studio.course.status}</small></a>
+        </nav>
+      </> : <>
+        <div class="studio-sidebar-heading"><span class="eyebrow">Creator Studio</span><h2>My Products</h2><p>{creatorProductCount} products across every format</p></div>
+        <nav class="studio-product-list" aria-label="My Products">
+          {dashboard.creatorCourses?.map((course) => (
+            <a href={`/tutor?courseId=${encodeURIComponent(course.id)}&section=overview`}>
+              <ProductIcon name="course" size="small" /><span><strong>{course.title}</strong><small>Course · {course.status} · {course.pricing_status}</small></span><b aria-hidden="true">›</b>
+            </a>
+          ))}
+          {creatorProducts.map((product) => (
+            <a href={creatorProductHref(product)}>
+              <ProductIcon name={productCatalogueKey(product.product_type)} size="small" /><span><strong>{product.title}</strong><small>{learningProductMeta[product.product_type].label} · {creatorProductStatus(product)} · version {product.content_version ?? 1}</small></span><b aria-hidden="true">›</b>
+            </a>
+          ))}
+        </nav>
+        {!creatorProductCount && <p class="studio-products-empty">Your drafts and published products will appear here.</p>}
+      </>}
+      <a class:list={["studio-new-course", { active: createMode }]} href="/dashboard?workspace=creation&section=getting-started"><span>＋</span><strong>Create product</strong><small>Choose any learning format</small></a>
     </aside>
 
     <main class="studio-main">
       {studioError && <p class="form-error">{studioError}</p>}
-      {createMode && <article class="panel studio-create-course"><div class="studio-section-intro"><div class="product-heading-with-icon"><ProductIcon name={requestedCourseProduct === "online_course" || requestedCourseProduct === "in_person_course" || requestedCourseProduct === "video_course" ? requestedCourseProduct : "course"} size="large" /><div><span class="eyebrow">New learning product</span><h2>Create {requestedCourseLabel.toLowerCase()}</h2><p>Start with the learning promise. Add content, delivery and pricing after the private draft is saved.</p></div></div><a class="text-link" href="/dashboard?workspace=creation">Cancel</a></div><form class="stack-form api-form" data-kind="course" action="/api/tutor/courses" method="post"><div class="form-columns"><label>Title<input name="title" required minlength="3" /></label><label>Topic<input name="subject" required placeholder="Mathematics, leadership, cooking…" /></label><label>Audience<input name="primaryLevel" required placeholder="Beginners, professionals, Primary 5…" /></label><label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing">Knowledge sharing</option><option value="seminar">Seminar</option><option value="workshop">Workshop</option><option value="coaching">Coaching</option><option value="certification-preparation">Certification preparation</option></select></label><label>Primary delivery<select name="deliveryMode"><option value="self-paced" selected={requestedCourseDelivery === "self-paced"}>Recorded / self-paced</option><option value="live" selected={requestedCourseDelivery === "live"}>Live online</option><option value="hybrid" selected={requestedCourseDelivery === "hybrid"}>In person / hybrid</option><option value="ai-supported">AI-supported</option></select></label></div><label>Description<textarea name="description" required minlength="20" rows="5"></textarea></label><p class="meet-assurance"><strong>Draft first:</strong> This product remains private. Build the content, then configure a learner price and publish from the offer step. Online sessions receive Google Meet links when scheduled.</p><button class="button" type="submit">Save draft and continue</button><p class="form-message" aria-live="polite"></p></form></article>}
+      {createMode && <article class="panel studio-create-course"><div class="studio-section-intro"><div class="product-heading-with-icon"><ProductIcon name={requestedCourseProduct === "online_course" || requestedCourseProduct === "in_person_course" || requestedCourseProduct === "video_course" ? requestedCourseProduct : "course"} size="large" /><div><span class="eyebrow">New learning product</span><h2>Create {requestedCourseLabel.toLowerCase()}</h2><p>Start with the learning promise. Add content, delivery and pricing after the private draft is saved.</p></div></div><a class="text-link" href="/dashboard?workspace=creation">Cancel</a></div><form class="stack-form api-form" data-kind="course" action="/api/tutor/courses" method="post"><div class="form-columns"><label>Title<input name="title" required minlength="3" /></label><label>Topic<input name="subject" required placeholder="Mathematics, leadership, cooking…" /></label><label>Audience<input name="primaryLevel" required placeholder="Beginners, professionals, Primary 5…" /></label><label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing">Knowledge sharing</option><option value="seminar">Seminar</option><option value="workshop">Workshop</option><option value="coaching">Coaching</option><option value="certification-preparation">Certification preparation</option></select></label><label>Primary delivery<select name="deliveryMode"><option value="self-paced" selected={requestedCourseDelivery === "self-paced"}>Recorded / self-paced</option><option value="live" selected={requestedCourseDelivery === "live"}>Live online</option><option value="hybrid" selected={requestedCourseDelivery === "hybrid"}>In person / hybrid</option><option value="ai-supported">AI-supported</option></select></label></div><label>Description<textarea name="description" required minlength="20" rows="5"></textarea></label><p class="meet-assurance"><strong>Draft first:</strong> This product remains private. Build the content, then configure a learner price and publish from the offer step. Online sessions receive Google Meet links when scheduled.</p><button class="button" type="submit" data-next-section="curriculum">Save draft and continue</button><p class="form-message" aria-live="polite"></p></form></article>}
       {!selectedId && !createMode && <article class="panel empty-state"><h2>Select a course</h2><p>Choose an existing course or create a new draft to start authoring.</p><a class="button button-small" href="/tutor?mode=new">Create a course</a></article>}
       {studio && (
         <>
-          <article class="panel studio-heading">
-            <div><span class="eyebrow">{activeSection} · {studio.course.status === "published" && studio.course.listing_status !== "listed" ? "unpublished" : studio.course.status} · version {studio.course.content_version ?? 1}</span><h2>{studio.course.title}</h2></div>
-            <div class="studio-heading-actions">
-              <a class="button button-small button-secondary" href={`/tutor/preview/${studio.course.id}`} target="_blank">Learner preview</a>
-              {studio.course.status === "published" && <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/copy`} method="post"><button class="button button-small button-secondary" type="submit">Create new version</button><p class="form-message"></p></form>}
-              {studio.course.status === "draft" && <form class="api-form" data-method="DELETE" data-confirm="Delete this draft course permanently?" action={`/api/tutor/courses/${studio.course.id}`} method="post"><button class="button button-small button-danger" type="submit">Delete draft</button><p class="form-message"></p></form>}
-              <a class="button button-small" href={studioUrl("publish")}>Review & publish</a>
+          <article class="panel studio-heading course-editor-topbar">
+            <div class="course-editor-topline">
+              <div class="course-editor-identity"><ProductIcon name={studio.course.delivery_mode === "live" ? "online_course" : studio.course.delivery_mode === "hybrid" ? "in_person_course" : studio.course.delivery_mode === "self-paced" ? "video_course" : "course"} size="small" /><div><span class="eyebrow">Course · {studio.course.delivery_mode.replaceAll("-", " ")}</span><h2>{studio.course.title}</h2><div class="course-editor-meta"><span class:list={["studio-status", studio.course.status]}>{studio.course.status === "published" && studio.course.listing_status !== "listed" ? "unpublished" : studio.course.status}</span><span>Version {studio.course.content_version ?? 1}</span><span>{studio.course.subject}</span></div></div></div>
+              <div class="studio-heading-actions">
+                <a class="button button-small button-secondary" href="/dashboard?workspace=creation&section=content">All products</a>
+                <a class="button button-small button-secondary" href={`/tutor/preview/${studio.course.id}`} target="_blank">Preview</a>
+                {studio.course.status === "published" && <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/copy`} method="post"><button class="button button-small button-secondary" type="submit">New version</button><p class="form-message"></p></form>}
+                <a class="button button-small" href={studioUrl("publish")}>Review & publish</a>
+              </div>
             </div>
+            <nav class="course-editor-progress" aria-label="Course creation progress">
+              <a class:list={{ active: activeSection === "overview", complete: true }} href={studioUrl("overview")}><span>1</span><strong>Details</strong></a>
+              <a class:list={{ active: ["curriculum", "assessments", "resources"].includes(activeSection), complete: studio.modules.length > 0 && studio.lessons.length > 0 }} href={studioUrl("curriculum")}><span>{studio.modules.length > 0 && studio.lessons.length > 0 ? "✓" : "2"}</span><strong>Content</strong></a>
+              <a class:list={{ active: activeSection === "offerings", complete: studio.offerings.length > 0 }} href={studioUrl("offerings")}><span>{studio.offerings.length > 0 ? "✓" : "3"}</span><strong>Price</strong></a>
+              <a class:list={{ active: activeSection === "sessions", complete: studio.sessions.length > 0 || studio.course.delivery_mode === "self-paced" }} href={studioUrl("sessions")}><span>{studio.sessions.length > 0 || studio.course.delivery_mode === "self-paced" ? "✓" : "4"}</span><strong>Schedule</strong></a>
+              <a class:list={{ active: activeSection === "publish", complete: studio.course.status === "published" }} href={studioUrl("publish")}><span>{studio.course.status === "published" ? "✓" : "5"}</span><strong>Publish</strong></a>
+            </nav>
           </article>
 
           {activeSection === "overview" && <article class="panel studio-overview">
@@ -262,9 +299,10 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
                   </select></label>
                 </div>
                 <label>Description<textarea name="description" required minlength="20" rows="5">{studio.course.description}</textarea></label>
-                <button class="button button-small" type="submit">Save course changes</button><p class="form-message"></p>
+                <div class="studio-form-actions"><button class="button button-small button-secondary" type="submit">Save draft</button><button class="button button-small" type="submit" data-next-section="curriculum">Save draft and continue</button></div><p class="form-message"></p>
               </form>
             </details>
+            {studio.course.status === "draft" && <details class="studio-danger-zone"><summary>More course actions</summary><form class="api-form" data-method="DELETE" data-confirm="Delete this draft course permanently?" action={`/api/tutor/courses/${studio.course.id}`} method="post"><p>Delete this private draft permanently. Published courses and learner records are not affected.</p><button class="button button-small button-danger" type="submit">Delete draft</button><p class="form-message"></p></form></details>}
           </article>}
 
           {activeSection === "offerings" && <article class="panel">
@@ -598,6 +636,13 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
             <section class="publish-offerings"><h3>Enrolment options</h3>{studio.offerings.map((offering) => <div><span><strong>{offering.title}</strong><small>{offering.status} · pricing {offering.pricing_status}</small></span>{offering.status !== "published" ? <form class="api-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="button button-small" type="submit">Open enrolment</button><p class="form-message"></p></form> : <span class="studio-status published">Published</span>}</div>)}</section>
             {studio.course.status === "published" && <section class="listing-controls"><span class="eyebrow">Publication visibility</span><h3>{studio.course.listing_status === "listed" ? "This course is published and discoverable." : "This course is unpublished."}</h3><p>{studio.course.listing_status === "listed" ? "Unpublishing stops new bookings while preserving existing learner access, results and records." : studio.course.delisted_reason ?? "Existing learners continue to have access."}</p>{studio.course.listing_status === "listed" ? <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/delist`} method="post"><input name="reason" required minlength="3" placeholder="Reason for unpublishing" /><button class="button button-small button-danger" type="submit">Unpublish course</button><p class="form-message"></p></form> : <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/relist`} method="post"><button class="button button-small" type="submit">Republish course</button><p class="form-message"></p></form>}</section>}
           </article>}
+          <nav class="studio-bottom-actions" aria-label="Course creation actions">
+            <a class="button button-secondary" href={studioUrl(previousWorkflowSection)} aria-disabled={workflowIndex === 0}>Back</a>
+            <span><small>Step {workflowIndex + 1} of {workflowSections.length}</small><strong>{["Details", "Content", "Price", "Schedule", "Publish"][workflowIndex]}</strong></span>
+            {workflowIndex < workflowSections.length - 1
+              ? <a class="button" href={studioUrl(nextWorkflowSection)}>Continue</a>
+              : <a class="button" href={studioUrl("publish")}>Review & publish</a>}
+          </nav>
         </>
       )}
     </main>
@@ -608,7 +653,7 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
         event.preventDefault();
         if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
         const message = form.querySelector<HTMLElement>(".form-message");
-        const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+        const button = event.submitter instanceof HTMLButtonElement ? event.submitter : form.querySelector<HTMLButtonElement>("button[type=submit]");
         if (button) button.disabled = true;
         if (message) { message.className = "form-message"; message.textContent = "Saving…"; }
         const values = Object.fromEntries(new FormData(form));
@@ -713,16 +758,17 @@ const readinessComplete = readiness.filter((item) => item.complete).length;
           if (button) button.disabled = false;
           return;
         }
-        if (message) { message.className = "form-success"; message.textContent = "Saved."; }
+        if (message) { message.className = "form-success"; message.textContent = "Draft saved."; }
         const method = (form.dataset.method ?? form.method.toUpperCase()).toUpperCase();
-        if (method === "PATCH") {
-          if (button) button.disabled = false;
-          return;
-        }
         const currentUrl = new URL(location.href);
         const courseId = result.course?.id ?? result.offering?.courseId ?? currentUrl.searchParams.get("courseId");
         const offeringId = result.offering?.id ?? currentUrl.searchParams.get("offeringId");
-        const section = currentUrl.searchParams.get("section");
+        const nextSection = button?.dataset.nextSection;
+        if (method === "PATCH" && !nextSection) {
+          if (button) button.disabled = false;
+          return;
+        }
+        const section = nextSection ?? currentUrl.searchParams.get("section");
         location.href = courseId
           ? `/tutor?courseId=${encodeURIComponent(courseId)}${section ? `&section=${encodeURIComponent(section)}` : ""}${offeringId ? `&offeringId=${encodeURIComponent(offeringId)}` : ""}`
           : "/tutor";

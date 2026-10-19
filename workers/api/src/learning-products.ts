@@ -70,6 +70,7 @@ type StoredProduct = {
   offer_course_slug?: string | null;
   offer_title?: string | null;
   offer_price_cents?: number | null;
+  product_offer_id?: string | null;
   primary_mime_type?: string | null;
   primary_original_filename?: string | null;
   resource_count?: number | null;
@@ -117,7 +118,7 @@ function publicProduct(product: StoredProduct, includeAnswers = false, includeCo
   };
 }
 
-const pricedPublishedOffer = `(p.listing_status = 'listed' AND EXISTS (
+const pricedPublishedOffer = `(p.listing_status = 'listed' AND (EXISTS (
   SELECT 1 FROM course_offering_learning_products gate_olp
   JOIN course_offerings gate_o ON gate_o.id = gate_olp.course_offering_id
   JOIN courses gate_c ON gate_c.id = gate_o.course_id
@@ -125,9 +126,20 @@ const pricedPublishedOffer = `(p.listing_status = 'listed' AND EXISTS (
     AND gate_o.status = 'published' AND gate_o.pricing_status = 'ready'
     AND gate_o.stripe_price_id IS NOT NULL AND gate_o.price_cents >= 50
     AND gate_c.status = 'published' AND gate_c.listing_status = 'listed'
-))`;
+) OR EXISTS (
+  SELECT 1 FROM product_offer_items gate_pi JOIN product_offers gate_po ON gate_po.id = gate_pi.product_offer_id
+  WHERE gate_pi.learning_product_id = p.id AND gate_po.status = 'published'
+    AND gate_po.pricing_status = 'ready' AND gate_po.stripe_price_id IS NOT NULL
+    AND gate_po.price_cents >= 50
+    AND (gate_po.enrolment_opens_at IS NULL OR gate_po.enrolment_opens_at <= datetime('now'))
+    AND (gate_po.enrolment_closes_at IS NULL OR gate_po.enrolment_closes_at >= datetime('now'))
+)))`;
 
 const productSelect = `SELECT p.*, COALESCE(NULLIF(u.display_name, ''), 'PencilScope creator') AS creator_name,
+  (SELECT gate_po.id FROM product_offer_items gate_pi JOIN product_offers gate_po ON gate_po.id = gate_pi.product_offer_id
+    WHERE gate_pi.learning_product_id = p.id AND gate_po.status = 'published'
+      AND gate_po.pricing_status = 'ready' AND gate_po.stripe_price_id IS NOT NULL AND gate_po.price_cents >= 50
+    ORDER BY gate_po.published_at DESC LIMIT 1) AS product_offer_id,
   (SELECT gate_c.slug FROM course_offering_learning_products gate_olp
     JOIN course_offerings gate_o ON gate_o.id = gate_olp.course_offering_id
     JOIN courses gate_c ON gate_c.id = gate_o.course_id
@@ -135,20 +147,26 @@ const productSelect = `SELECT p.*, COALESCE(NULLIF(u.display_name, ''), 'PencilS
       AND gate_o.pricing_status = 'ready' AND gate_o.stripe_price_id IS NOT NULL
       AND gate_o.price_cents >= 50 AND gate_c.status = 'published' AND gate_c.listing_status = 'listed'
     ORDER BY gate_o.created_at DESC LIMIT 1) AS offer_course_slug,
-  (SELECT gate_o.title FROM course_offering_learning_products gate_olp
+  COALESCE((SELECT gate_po.title FROM product_offer_items gate_pi JOIN product_offers gate_po ON gate_po.id = gate_pi.product_offer_id
+    WHERE gate_pi.learning_product_id = p.id AND gate_po.status = 'published'
+      AND gate_po.pricing_status = 'ready' AND gate_po.stripe_price_id IS NOT NULL AND gate_po.price_cents >= 50
+    ORDER BY gate_po.published_at DESC LIMIT 1), (SELECT gate_o.title FROM course_offering_learning_products gate_olp
     JOIN course_offerings gate_o ON gate_o.id = gate_olp.course_offering_id
     JOIN courses gate_c ON gate_c.id = gate_o.course_id
     WHERE gate_olp.learning_product_id = p.id AND gate_o.status = 'published'
       AND gate_o.pricing_status = 'ready' AND gate_o.stripe_price_id IS NOT NULL
       AND gate_o.price_cents >= 50 AND gate_c.status = 'published' AND gate_c.listing_status = 'listed'
-    ORDER BY gate_o.created_at DESC LIMIT 1) AS offer_title,
-  (SELECT gate_o.price_cents FROM course_offering_learning_products gate_olp
+    ORDER BY gate_o.created_at DESC LIMIT 1)) AS offer_title,
+  COALESCE((SELECT gate_po.price_cents FROM product_offer_items gate_pi JOIN product_offers gate_po ON gate_po.id = gate_pi.product_offer_id
+    WHERE gate_pi.learning_product_id = p.id AND gate_po.status = 'published'
+      AND gate_po.pricing_status = 'ready' AND gate_po.stripe_price_id IS NOT NULL AND gate_po.price_cents >= 50
+    ORDER BY gate_po.published_at DESC LIMIT 1), (SELECT gate_o.price_cents FROM course_offering_learning_products gate_olp
     JOIN course_offerings gate_o ON gate_o.id = gate_olp.course_offering_id
     JOIN courses gate_c ON gate_c.id = gate_o.course_id
     WHERE gate_olp.learning_product_id = p.id AND gate_o.status = 'published'
       AND gate_o.pricing_status = 'ready' AND gate_o.stripe_price_id IS NOT NULL
       AND gate_o.price_cents >= 50 AND gate_c.status = 'published' AND gate_c.listing_status = 'listed'
-    ORDER BY gate_o.created_at DESC LIMIT 1) AS offer_price_cents
+    ORDER BY gate_o.created_at DESC LIMIT 1)) AS offer_price_cents
   FROM learning_products p JOIN users u ON u.id = p.creator_id`;
 
 async function listProducts(request: Request, env: ApiEnvironment): Promise<Response> {
@@ -444,7 +462,10 @@ async function createProduct(request: Request, env: ApiEnvironment): Promise<Res
   let questions: LearningProductQuestion[] = [];
   const content: Record<string, unknown> = {};
   let questionMedia: Array<{ questionId: string; value: ResolvedQuestionMedia }> = [];
-  if (isAssessmentProduct(payload.productType)) {
+  const metadataOnly = payload.metadataOnly === true && payload.status !== "published";
+  if (metadataOnly) {
+    content.setupIncomplete = true;
+  } else if (isAssessmentProduct(payload.productType)) {
     const validated = await validateQuestions(env, actor.id, payload.questions);
     if (validated instanceof Response) return validated;
     if (!validated) return problem(400, "invalid_questions", "Add at least one complete question with two answers and a correct answer.");
@@ -678,11 +699,17 @@ async function publishProduct(request: Request, env: ApiEnvironment, id: string)
   const actor = await getCreatorActorById(userId(request), env.DB);
   if (!actor) return problem(401, "authentication_required", "Sign in to publish this learning product.");
   const product = await env.DB.prepare(
-    "SELECT id, creator_id, status FROM learning_products WHERE id = ?"
-  ).bind(id).first<{ id: string; creator_id: string; status: string }>();
+    "SELECT id, creator_id, product_type, status, content_url, content_json FROM learning_products WHERE id = ?"
+  ).bind(id).first<Pick<StoredProduct, "id" | "creator_id" | "product_type" | "status" | "content_url" | "content_json">>();
   if (!product) return problem(404, "learning_product_not_found", "This learning product does not exist.");
   if (product.creator_id !== actor.id && actor.role !== "admin") {
     return problem(403, "learning_product_forbidden", "You cannot publish this learning product.");
+  }
+  const hasCompleteContent = isAssessmentProduct(product.product_type)
+    ? parseQuestions(product.content_json).length > 0
+    : Boolean(product.content_url);
+  if (!hasCompleteContent) {
+    return problem(409, "product_content_required", "Complete the product content before publishing.");
   }
   const now = new Date().toISOString();
   await env.DB.batch([

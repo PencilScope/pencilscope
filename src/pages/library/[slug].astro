@@ -12,7 +12,7 @@ if (!product) return Astro.redirect("/404");
 const meta = learningProductMeta[product.product_type];
 const signedIn = Boolean(userId);
 const hasAccess = Boolean(product.has_access);
-const hasPricedOffer = Boolean(product.offer_course_slug && product.offer_title && product.offer_price_cents);
+const hasPricedOffer = Boolean((product.product_offer_id || product.offer_course_slug) && product.offer_title && product.offer_price_cents);
 const offerPrice = product.offer_price_cents ?? 0;
 const questions = product.questions ?? [];
 const contentUrl = product.content_url ?? "";
@@ -103,7 +103,9 @@ const assessmentGuidance = product.product_type === "quiz"
           <span class="eyebrow">Purchase required</span>
           <h2>Unlock this product through its learning offer</h2>
           <p>The creator has published this product inside <strong>{product.offer_title ?? "a priced offer"}</strong>. Enrol to access the content and keep your progress.</p>
-          {product.offer_course_slug
+          {product.product_offer_id
+            ? <a class="button" href={`/offers/product-${product.product_offer_id}`}>View offer and enrol</a>
+            : product.offer_course_slug
             ? <a class="button" href={`/courses/${product.offer_course_slug}`}>View offer and enrol</a>
             : <a class="button" href="/courses">Browse published offers</a>}
         </article>

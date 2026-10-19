@@ -1,0 +1,158 @@
+---
+import { getEnv } from "@/lib/runtime";
+import { turnstileSiteKey } from "@/lib/turnstile";
+
+type Props = { sourcePath: string };
+const { sourcePath } = Astro.props;
+const siteKey = turnstileSiteKey(getEnv(Astro.locals));
+const countries = [
+  ["AU","Australia","+61"],["BD","Bangladesh","+880"],["BR","Brazil","+55"],["CA","Canada","+1"],
+  ["CN","China","+86"],["FR","France","+33"],["DE","Germany","+49"],["HK","Hong Kong","+852"],
+  ["IN","India","+91"],["ID","Indonesia","+62"],["IE","Ireland","+353"],["IT","Italy","+39"],
+  ["JP","Japan","+81"],["MY","Malaysia","+60"],["MX","Mexico","+52"],["NL","Netherlands","+31"],
+  ["NZ","New Zealand","+64"],["NG","Nigeria","+234"],["PK","Pakistan","+92"],["PH","Philippines","+63"],
+  ["SA","Saudi Arabia","+966"],["SG","Singapore","+65"],["ZA","South Africa","+27"],["KR","South Korea","+82"],
+  ["ES","Spain","+34"],["LK","Sri Lanka","+94"],["AE","United Arab Emirates","+971"],
+  ["GB","United Kingdom","+44"],["US","United States","+1"],["VN","Vietnam","+84"],["ZZ","Other","+1"]
+];
+---
+
+<div class="contact-assistant" data-contact-assistant>
+  <button class="contact-launcher" type="button" aria-haspopup="dialog" data-contact-open>
+    <span aria-hidden="true">✦</span><span>Contact us</span>
+  </button>
+  <dialog class="contact-dialog" aria-labelledby="contact-heading" data-contact-dialog>
+    <form method="dialog" class="contact-close-form"><button aria-label="Close contact form">×</button></form>
+    <div class="contact-heading">
+      <span class="assistant-mark" aria-hidden="true">✦</span>
+      <div><p>PencilScope assistant</p><h2 id="contact-heading">How can we help?</h2></div>
+    </div>
+    <p class="assistant-bubble">Tell us a little about your question. It takes about a minute.</p>
+    <form action="/api/contact-enquiries" method="post" data-contact-form>
+      <input type="hidden" name="submissionId" />
+      <input type="hidden" name="startedAt" />
+      <input type="hidden" name="sourcePath" value={sourcePath} />
+      <input type="hidden" name="countryName" />
+      <input type="hidden" name="consentVersion" value="2026-10" />
+      <label class="honey" aria-hidden="true">Company website<input name="companyWebsite" tabindex="-1" autocomplete="off" /></label>
+
+      <section data-contact-step="0">
+        <p class="step-label">Step 1 of 3</p>
+        <label>What can we help with?
+          <select name="enquiryType" required>
+            <option value="">Choose an enquiry type</option>
+            <option value="learning_enrolment">Learning or enrolment</option>
+            <option value="creator_support">Creator support</option>
+            <option value="billing">Billing or payment</option>
+            <option value="technical_problem">Technical problem</option>
+            <option value="business_partnership">Business or partnership</option>
+            <option value="privacy_account">Privacy or account</option>
+            <option value="general">General question</option>
+            <option value="other">Something else</option>
+          </select>
+        </label>
+        <label>Your name<input name="name" required minlength="2" maxlength="100" autocomplete="name" /></label>
+      </section>
+
+      <section data-contact-step="1" hidden>
+        <p class="step-label">Step 2 of 3</p>
+        <label>Country
+          <select name="countryCode" required data-contact-country>
+            <option value="">Choose your country</option>
+            {countries.map(([code,name,callingCode]) => <option value={code} data-calling-code={callingCode}>{name}</option>)}
+          </select>
+        </label>
+        <label>Contact number
+          <span class="phone-fields"><input name="callingCode" aria-label="Country calling code" required pattern="\+[1-9][0-9]{0,3}" maxlength="5" placeholder="+65" /><input name="phone" aria-label="Contact number" required inputmode="tel" autocomplete="tel-national" minlength="6" maxlength="24" placeholder="8123 4567" /></span>
+        </label>
+      </section>
+
+      <section data-contact-step="2" hidden>
+        <p class="step-label">Step 3 of 3</p>
+        <label>Your message<textarea name="message" required minlength="10" maxlength="4000" rows="5" placeholder="Tell us what you need help with."></textarea></label>
+        <label class="consent"><input type="checkbox" required /> <span>I agree that PencilScope may use these details to respond to my enquiry. See our <a href="/privacy">privacy notice</a>.</span></label>
+        {siteKey ? <div class="cf-turnstile" data-sitekey={siteKey} data-action="contact" data-appearance="interaction-only" data-response-field-name="cf-turnstile-response"></div> : <p class="contact-error">Contact verification is not configured.</p>}
+      </section>
+
+      <p class="contact-result" role="status" aria-live="polite" data-contact-result></p>
+      <div class="contact-actions">
+        <button type="button" class="secondary" data-contact-back hidden>Back</button>
+        <button type="button" data-contact-next>Continue</button>
+        <button type="submit" data-contact-submit hidden>Send enquiry</button>
+      </div>
+    </form>
+  </dialog>
+</div>
+{siteKey && <script is:inline src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>}
+
+<script>
+  const root = document.querySelector<HTMLElement>("[data-contact-assistant]");
+  const dialog = root?.querySelector<HTMLDialogElement>("[data-contact-dialog]");
+  const form = root?.querySelector<HTMLFormElement>("[data-contact-form]");
+  const steps = [...(root?.querySelectorAll<HTMLElement>("[data-contact-step]") ?? [])];
+  const back = root?.querySelector<HTMLButtonElement>("[data-contact-back]");
+  const next = root?.querySelector<HTMLButtonElement>("[data-contact-next]");
+  const submit = root?.querySelector<HTMLButtonElement>("[data-contact-submit]");
+  const result = root?.querySelector<HTMLElement>("[data-contact-result]");
+  let step = 0;
+
+  const showStep = (value: number) => {
+    step = Math.max(0, Math.min(steps.length - 1, value));
+    steps.forEach((item, index) => item.hidden = index !== step);
+    if (back) back.hidden = step === 0;
+    if (next) next.hidden = step === steps.length - 1;
+    if (submit) submit.hidden = step !== steps.length - 1;
+    result?.replaceChildren();
+  };
+  const validateStep = () => {
+    const fields = [...steps[step].querySelectorAll("input,select,textarea")] as Array<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
+    for (const field of fields) if (!field.reportValidity()) return false;
+    return true;
+  };
+
+  root?.querySelector("[data-contact-open]")?.addEventListener("click", () => {
+    if (!form || !dialog) return;
+    const submissionId = form.elements.namedItem("submissionId") as HTMLInputElement | null;
+    if (submissionId && !submissionId.value) submissionId.value = crypto.randomUUID();
+    (form.elements.namedItem("startedAt") as HTMLInputElement).value = String(Date.now());
+    showStep(0);
+    dialog.showModal();
+  });
+  next?.addEventListener("click", () => { if (validateStep()) showStep(step + 1); });
+  back?.addEventListener("click", () => showStep(step - 1));
+  root?.querySelector("[data-contact-country]")?.addEventListener("change", (event) => {
+    if (!form) return;
+    const select = event.currentTarget as HTMLSelectElement;
+    const option = select.selectedOptions[0];
+    (form.elements.namedItem("countryName") as HTMLInputElement).value = option?.textContent?.trim() ?? "";
+    (form.elements.namedItem("callingCode") as HTMLInputElement).value = option?.dataset.callingCode ?? "";
+  });
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!validateStep() || !submit || !result) return;
+    submit.disabled = true;
+    result.className = "contact-result";
+    result.textContent = "Sending your enquiry…";
+    try {
+      const response = await fetch(form.action, { method: "POST", body: new FormData(form), headers: { accept: "application/json" } });
+      const payload = await response.json() as { enquiry?: { referenceCode?: string }; error?: string };
+      if (!response.ok || !payload.enquiry) throw new Error(payload.error || "Your enquiry could not be sent.");
+      result.className = "contact-result success";
+      result.textContent = `Thanks — your reference is ${payload.enquiry.referenceCode}.`;
+      submit.hidden = true;
+      back!.hidden = true;
+      const fields = [...form.querySelectorAll("input,select,textarea")] as Array<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>;
+      fields.forEach((field) => {
+        if (field.type !== "hidden" && field.type !== "checkbox") field.disabled = true;
+      });
+    } catch (error) {
+      result.className = "contact-result error";
+      result.textContent = error instanceof Error ? error.message : "Your enquiry could not be sent.";
+      submit.disabled = false;
+    }
+  });
+</script>
+
+<style>
+  .contact-assistant{position:fixed;right:22px;bottom:22px;z-index:80}.contact-launcher{display:flex;align-items:center;gap:9px;padding:13px 18px;border:0;border-radius:999px;background:#102a56;color:#fff;font:700 14px/1 "DM Sans",sans-serif;box-shadow:0 12px 35px #102a5640;cursor:pointer}.contact-launcher span:first-child,.assistant-mark{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;background:#f3c64e;color:#102a56}.contact-dialog{width:min(410px,calc(100vw - 24px));max-height:min(720px,calc(100vh - 32px));margin:auto 18px 18px auto;padding:0;border:1px solid #d7e2f0;border-radius:20px;background:#fff;color:#102a56;box-shadow:0 24px 70px #081f4250}.contact-dialog::backdrop{background:#081f4226}.contact-close-form{position:absolute;right:12px;top:10px}.contact-close-form button{width:34px;height:34px;border:0;border-radius:50%;background:#eef6ff;color:#102a56;font-size:22px;cursor:pointer}.contact-heading{display:flex;gap:12px;align-items:center;padding:22px 52px 14px 22px;background:#102a56;color:#fff}.contact-heading p,.contact-heading h2{margin:0}.contact-heading p{font-size:11px;opacity:.78;text-transform:uppercase;letter-spacing:.08em}.contact-heading h2{font-size:21px}.assistant-mark{flex:none}.assistant-bubble{margin:18px 22px 8px;padding:12px 14px;border-radius:4px 14px 14px;background:#eef6ff;font-size:14px}.contact-dialog form[data-contact-form]{padding:8px 22px 22px}.contact-dialog section{display:grid;gap:13px}.step-label{margin:3px 0;color:#60738b;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.contact-dialog label{display:grid;gap:6px;font-size:13px;font-weight:700}.contact-dialog input,.contact-dialog select,.contact-dialog textarea{width:100%;padding:11px 12px;border:1px solid #b9c9dc;border-radius:9px;background:#fff;color:#102a56;font:inherit}.contact-dialog textarea{resize:vertical}.phone-fields{display:grid;grid-template-columns:82px 1fr;gap:8px}.consent{grid-template-columns:18px 1fr!important;align-items:start;font-size:11px!important;font-weight:500!important;line-height:1.4}.consent input{margin:2px 0;width:auto}.contact-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}.contact-actions button{padding:10px 14px;border:0;border-radius:8px;background:#1d4ed8;color:#fff;font-weight:700;cursor:pointer}.contact-actions .secondary{border:1px solid #b9c9dc;background:#fff;color:#102a56}.contact-actions button:disabled{opacity:.55}.contact-result{margin:12px 0 0;font-size:13px}.contact-result.success{padding:11px;border-radius:8px;background:#e8f7ef;color:#174a36}.contact-result.error,.contact-error{color:#8a1c1c}.honey{position:absolute!important;left:-10000px!important}.contact-dialog [hidden]{display:none!important}@media(max-width:600px){.contact-assistant{right:12px;bottom:12px}.contact-dialog{margin:auto auto 10px;max-height:calc(100vh - 20px)}}
+</style>
