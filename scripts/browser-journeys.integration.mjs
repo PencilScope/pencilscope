@@ -142,6 +142,15 @@ try {
   assert.ok(await evaluate("[...document.querySelectorAll('.catalogue-filters a')].some((item)=>item.textContent.includes('Single resources'))"), "Catalogue is missing the learner-friendly single-resource type");
   assert.equal(await evaluate("document.querySelector('#offer-search')?.getAttribute('placeholder')"), "Search by topic, skill, format or expert…");
   assert.ok(await evaluate("Boolean(document.querySelector('[name=\"topic\"]')) && Boolean(document.querySelector('[name=\"delivery\"]')) && Boolean(document.querySelector('[name=\"availability\"]')) && Boolean(document.querySelector('[name=\"sort\"]'))"), "Catalogue is missing refinement controls");
+  const firstLearningPack = await evaluate("document.querySelector('.offer-card-link')?.href || ''");
+  if (firstLearningPack) {
+    await navigate(firstLearningPack);
+    await assertHealthyPage("learning pack detail");
+    assert.equal(await evaluate("document.querySelectorAll('[data-share-panel] .share-icon').length >= 6"), true, "Learning pack is missing social sharing icons");
+    assert.ok(await evaluate("Boolean(document.querySelector('[data-share-panel] .share-whatsapp'))"), "Learning pack is missing WhatsApp sharing");
+    assert.ok(await evaluate("Boolean(document.querySelector('[data-share-panel] .share-facebook'))"), "Learning pack is missing Facebook sharing");
+    assert.ok(await evaluate("Boolean(document.querySelector('[data-share-panel] .share-linkedin'))"), "Learning pack is missing LinkedIn sharing");
+  }
 
   if (process.env.BROWSER_LANDING_ONLY !== "1") {
   await login("browser-learner-20261014@example.com", "BrowserTest!2026");

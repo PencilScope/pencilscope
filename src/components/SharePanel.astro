@@ -1,0 +1,71 @@
+---
+type Props = {
+  title: string;
+  url: string;
+  label?: string;
+};
+
+const { title, url, label = "Share this learning pack" } = Astro.props;
+const shareText = `Discover ${title} on PencilScope`;
+const encodedUrl = encodeURIComponent(url);
+const encodedText = encodeURIComponent(shareText);
+---
+
+<div class="course-share social-share-panel" data-share-panel data-share-url={url} data-share-title={title}>
+  <span>{label}</span>
+  <div class="social-share-actions">
+    <button class="share-chip share-icon share-native" type="button" aria-label="Share using your device" title="Share">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V3m0 0L7 8m5-5 5 5M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6" /></svg>
+    </button>
+    <a class="share-chip share-icon share-whatsapp" href={`https://wa.me/?text=${encodedText}%20${encodedUrl}`} target="_blank" rel="noopener noreferrer nofollow" aria-label="Share on WhatsApp" title="WhatsApp">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 11.7a8.5 8.5 0 0 1-12.6 7.5L3 20.5l1.3-4.7A8.5 8.5 0 1 1 20.5 11.7Z" /><path d="M8.2 7.7c.2-.4.4-.4.7-.4h.5l1.1 2.5c.1.3 0 .5-.2.8l-.7.8c.8 1.6 1.9 2.7 3.6 3.4l.8-1c.2-.2.5-.3.8-.2l2.3 1.1c.3.2.4.4.3.8-.2 1.2-1.3 2.2-2.6 2.3-1.4.1-3.7-.7-5.7-2.5-2.2-1.9-3.4-4.4-3.3-5.8.1-.7 1.4-1.8 1.4-1.8Z" /></svg>
+    </a>
+    <a class="share-chip share-icon share-facebook" href={`https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`} target="_blank" rel="noopener noreferrer nofollow" aria-label="Share on Facebook" title="Facebook">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 8h3V4h-3c-3 0-5 2-5 5v3H6v4h3v5h4v-5h3l1-4h-4V9c0-.7.3-1 1-1Z" /></svg>
+    </a>
+    <a class="share-chip share-icon share-linkedin" href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`} target="_blank" rel="noopener noreferrer nofollow" aria-label="Share on LinkedIn" title="LinkedIn">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 9v10M5 5.5v.1M10 19v-6c0-2 1.3-4 3.7-4 2.2 0 3.3 1.5 3.3 4v6M10 13v-4" /></svg>
+    </a>
+    <a class="share-chip share-icon share-x" href={`https://twitter.com/intent/tweet?text=${encodedText}&url=${encodedUrl}`} target="_blank" rel="noopener noreferrer nofollow" aria-label="Share on X" title="X">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4l14 16M19 4 5 20" /></svg>
+    </a>
+    <a class="share-chip share-icon share-email" href={`mailto:?subject=${encodedText}&body=${encodedText}%0A%0A${encodedUrl}`} aria-label="Share by email" title="Email">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v12H3z" /><path d="m4 7 8 6 8-6" /></svg>
+    </a>
+    <button class="share-chip share-icon share-copy" type="button" aria-label="Copy learning pack link" title="Copy link">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h2" /></svg>
+    </button>
+  </div>
+  <small class="share-status" aria-live="polite"></small>
+</div>
+
+<script>
+  const copyLink = async (value: string) => {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard access is unavailable.");
+    return navigator.clipboard.writeText(value);
+  };
+
+  document.querySelectorAll<HTMLElement>("[data-share-panel]").forEach((panel) => {
+    if (panel.dataset.shareReady === "true") return;
+    panel.dataset.shareReady = "true";
+    const url = panel.dataset.shareUrl ?? location.href;
+    const title = panel.dataset.shareTitle ?? document.title;
+    const status = panel.querySelector<HTMLElement>(".share-status");
+    const nativeButton = panel.querySelector<HTMLButtonElement>(".share-native");
+    if (!("share" in navigator) && nativeButton) nativeButton.hidden = true;
+    nativeButton?.addEventListener("click", async () => {
+      try {
+        await navigator.share({ title, text: `Discover ${title} on PencilScope`, url });
+        if (status) status.textContent = "Share options opened.";
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+        await copyLink(url);
+        if (status) status.textContent = "Learning pack link copied.";
+      }
+    });
+    panel.querySelector<HTMLButtonElement>(".share-copy")?.addEventListener("click", async () => {
+      await copyLink(url);
+      if (status) status.textContent = "Learning pack link copied.";
+    });
+  });
+</script>
