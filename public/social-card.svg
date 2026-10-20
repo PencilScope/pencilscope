@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
   <title id="title">PencilScope</title>
-  <desc id="description">Learn brightly with courses created by people who have knowledge to share.</desc>
+  <desc id="description">PencilScope logo with the tagline: Knowledge Shared by Experts, and pencilscope.com.</desc>
   <rect width="1200" height="630" fill="#f7f2e8"/>
   <circle cx="1020" cy="105" r="210" fill="#d8ef70" opacity=".65"/>
   <circle cx="1065" cy="555" r="250" fill="#91cbe0" opacity=".45"/>
@@ -10,5 +10,6 @@
     <rect width="80" height="275" x="200" y="65" rx="35" fill="#17372b"/>
   </g>
   <text x="465" y="265" fill="#17372b" font-family="Georgia,serif" font-size="92" font-weight="700">PencilScope</text>
-  <text x="470" y="350" fill="#586b63" font-family="Arial,sans-serif" font-size="34">Learn brightly. Share what you know.</text>
+  <text x="470" y="350" fill="#586b63" font-family="Arial,sans-serif" font-size="34">Knowledge Shared by Experts</text>
+  <text x="470" y="405" fill="#17372b" font-family="Arial,sans-serif" font-size="24" font-weight="700">pencilscope.com</text>
 </svg>

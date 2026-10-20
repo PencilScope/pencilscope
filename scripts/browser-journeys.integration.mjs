@@ -118,6 +118,10 @@ try {
     issues.push('Landing page is missing the approved "Knowledge Platform for everyone" heading.');
   }
   assert.match(home.text, /experts|experience/i);
+  assert.match(await evaluate("document.querySelector('meta[property=\"og:title\"]')?.content || ''"), /Knowledge Shared by Experts/i, "Homepage Open Graph title is missing the tagline");
+  assert.match(await evaluate("document.querySelector('meta[property=\"og:image\"]')?.content || ''"), /\/social-card-knowledge\.png$/, "Homepage Open Graph image is not the cache-busted branded PNG");
+  assert.equal(await evaluate("document.querySelector('meta[property=\"og:image:width\"]')?.content"), "1200", "Homepage social image width is missing");
+  assert.equal(await evaluate("document.querySelector('meta[property=\"og:image:height\"]')?.content"), "630", "Homepage social image height is missing");
   assert.ok(await evaluate("Boolean(document.querySelector('a[href^=\"/sign-in\"]'))"));
   assert.ok(await evaluate("Boolean(document.querySelector('[data-contact-open]'))"), "landing page is missing the contact assistant");
   await evaluate("document.querySelector('[data-contact-open]').click()");
@@ -282,7 +286,11 @@ try {
       await rm(profile, { recursive: true, force: true });
       break;
     } catch (error) {
-      if (error?.code !== "EBUSY" || attempt === 39) throw error;
+      if (error?.code !== "EBUSY") throw error;
+      if (attempt === 39) {
+        process.stderr.write(`Browser profile cleanup deferred because a Chromium file is still locked: ${profile}\n`);
+        break;
+      }
       await delay(500);
     }
   }
