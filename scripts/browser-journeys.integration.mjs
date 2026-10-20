@@ -122,6 +122,8 @@ try {
   assert.match(await evaluate("document.querySelector('meta[property=\"og:image\"]')?.content || ''"), /\/social-card-knowledge\.png$/, "Homepage Open Graph image is not the cache-busted branded PNG");
   assert.equal(await evaluate("document.querySelector('meta[property=\"og:image:width\"]')?.content"), "1200", "Homepage social image width is missing");
   assert.equal(await evaluate("document.querySelector('meta[property=\"og:image:height\"]')?.content"), "630", "Homepage social image height is missing");
+  assert.equal(await evaluate("document.documentElement.lang"), "en", "Portal should default to English");
+  assert.equal(await evaluate("document.querySelectorAll('.language-switcher select[name=\"locale\"] option').length"), 4, "Portal language selector must offer four launch languages");
   assert.ok(await evaluate("Boolean(document.querySelector('a[href^=\"/sign-in\"]'))"));
   assert.ok(await evaluate("Boolean(document.querySelector('[data-contact-open]'))"), "landing page is missing the contact assistant");
   await evaluate("document.querySelector('[data-contact-open]').click()");
@@ -145,7 +147,7 @@ try {
   assert.ok(await evaluate("[...document.querySelectorAll('.catalogue-filter-groups strong')].some((item)=>item.textContent.trim()==='Learning type')"), "Catalogue must separate learning type from category");
   assert.ok(await evaluate("[...document.querySelectorAll('.catalogue-filters a')].some((item)=>item.textContent.includes('Single resources'))"), "Catalogue is missing the learner-friendly single-resource type");
   assert.equal(await evaluate("document.querySelector('#offer-search')?.getAttribute('placeholder')"), "Search by topic, skill, format or expert…");
-  assert.ok(await evaluate("Boolean(document.querySelector('[name=\"topic\"]')) && Boolean(document.querySelector('[name=\"delivery\"]')) && Boolean(document.querySelector('[name=\"availability\"]')) && Boolean(document.querySelector('[name=\"sort\"]'))"), "Catalogue is missing refinement controls");
+  assert.ok(await evaluate("Boolean(document.querySelector('.catalogue-refine [name=\"topic\"]')) && Boolean(document.querySelector('.catalogue-refine [name=\"language\"]')) && Boolean(document.querySelector('.catalogue-refine [name=\"delivery\"]')) && Boolean(document.querySelector('.catalogue-refine [name=\"availability\"]')) && Boolean(document.querySelector('.catalogue-refine [name=\"sort\"]'))"), "Catalogue is missing refinement controls");
   const firstLearningPack = await evaluate("document.querySelector('.offer-card-link')?.href || ''");
   if (firstLearningPack) {
     await navigate(firstLearningPack);
@@ -155,6 +157,12 @@ try {
     assert.ok(await evaluate("Boolean(document.querySelector('[data-share-panel] .share-facebook'))"), "Learning pack is missing Facebook sharing");
     assert.ok(await evaluate("Boolean(document.querySelector('[data-share-panel] .share-linkedin'))"), "Learning pack is missing LinkedIn sharing");
   }
+  await evaluate("fetch('/api/preferences/language',{method:'POST',body:new URLSearchParams({locale:'ms',returnTo:'/'})}).then((response)=>response.text())");
+  await navigate(site + "/");
+  assert.equal(await evaluate("document.documentElement.lang"), "ms", "Selected portal language did not persist");
+  assert.match(await bodyText(), /Platform Ilmu untuk semua/i, "Malay landing translation did not render");
+  await command("Network.clearBrowserCookies");
+  await navigate(site + "/");
 
   if (process.env.BROWSER_LANDING_ONLY !== "1") {
   await login("browser-learner-20261014@example.com", "BrowserTest!2026");

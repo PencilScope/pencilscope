@@ -70,6 +70,7 @@
 /* Network workspace uses violet to remain distinct from learning blue and creation emerald. */
 .network-context{--workspace-accent:#6d28d9;--workspace-accent-dark:#4c1d95;--workspace-tint:#f5f3ff;--workspace-soft:#ede9fe;--workspace-line:#c4b5fd;--workspace-shadow:rgba(109,40,217,.18)}
 .network-context .site-header{border-bottom-color:var(--workspace-line);box-shadow:inset 0 -3px var(--workspace-accent)}
+.language-switcher{margin:0}.language-switcher label{display:block}.language-switcher select{max-width:128px;height:38px;padding:0 27px 0 9px;border:1px solid #bfd0e5;border-radius:9px;color:var(--ink);background:#fff;font:700 11px "DM Sans",sans-serif;cursor:pointer}.language-switcher select:hover{border-color:#6f96c7;background:#f4f8ff}@media(max-width:760px){.language-switcher select{width:48px;max-width:48px;padding-inline:6px;color:transparent;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 5h16M12 5a15 15 0 0 1 0 14M12 5a15 15 0 0 0 0 14M4 19h16M5 9h14M5 15h14' fill='none' stroke='%23102a56' stroke-width='1.6'/%3E%3C/svg%3E") center/22px no-repeat}.language-switcher option{color:var(--ink)}}
 .network-context main{background:linear-gradient(180deg,var(--workspace-tint) 0,rgba(255,255,255,0) 260px),#f8fbff}
 .network-context .network-workspace-link.active{padding-inline:10px;border-radius:8px;color:var(--workspace-accent-dark);background:var(--workspace-tint)}
 .network-context .network-workspace-link.active:after{background:var(--workspace-accent)}

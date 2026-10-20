@@ -157,6 +157,7 @@ export async function handleMarketplaceOfferRequest(request: Request, env: ApiEn
     const topic = (url.searchParams.get("topic") ?? "").trim().toLocaleLowerCase();
     const delivery = (url.searchParams.get("delivery") ?? "").trim();
     const available = (url.searchParams.get("availability") ?? "").trim();
+    const language = (url.searchParams.get("language") ?? "").trim();
     const sort = (url.searchParams.get("sort") ?? "relevant").trim();
     const rows = await offerRows(env);
     const offers = rows.map(publicOffer).filter((offer) =>
@@ -167,6 +168,7 @@ export async function handleMarketplaceOfferRequest(request: Request, env: ApiEn
       && (!topic || offer.topics.some((value) => value.toLocaleLowerCase() === topic))
       && (!delivery || offer.deliveryMode.split(",").some((value) => value === delivery || (delivery === "self_paced" && value === "recorded")))
       && (!available || offer.availability === available)
+      && (!language || offer.languages.includes(language))
     ).sort((left, right) => {
       if (sort === "price_low") return left.priceCents - right.priceCents;
       if (sort === "price_high") return right.priceCents - left.priceCents;

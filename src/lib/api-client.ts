@@ -77,7 +77,7 @@ export async function findLearningProductBySlug(slug: string, userId?: string): 
   }
 }
 
-export async function listPublishedOffers(filters: { q?: string; type?: string; kind?: string; topic?: string; delivery?: string; availability?: string; sort?: string } = {}): Promise<MarketplaceOffer[]> {
+export async function listPublishedOffers(filters: { q?: string; type?: string; kind?: string; topic?: string; delivery?: string; availability?: string; language?: string; sort?: string } = {}): Promise<MarketplaceOffer[]> {
   try {
     const query = new URLSearchParams();
     if (filters.q) query.set("q", filters.q);
@@ -86,6 +86,7 @@ export async function listPublishedOffers(filters: { q?: string; type?: string; 
     if (filters.topic) query.set("topic", filters.topic);
     if (filters.delivery) query.set("delivery", filters.delivery);
     if (filters.availability) query.set("availability", filters.availability);
+    if (filters.language) query.set("language", filters.language);
     if (filters.sort) query.set("sort", filters.sort);
     const response = await requestApi(`/api/offers${query.size ? `?${query}` : ""}`);
     if (!response.ok) throw new Error(`Offer API returned ${response.status}`);

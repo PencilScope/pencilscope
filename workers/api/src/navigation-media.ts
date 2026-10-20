@@ -39,7 +39,7 @@ async function navigationState(request: Request, env: ApiEnvironment): Promise<R
   const actor = await activeUser(request, env);
   if (!actor) return problem(401, "authentication_required", "Sign in to continue.");
   const now = new Date().toISOString();
-  const [notifications, unreadNotifications, unreadMessages, pendingConnections, billingRole] = await Promise.all([
+  const [notifications, unreadNotifications, unreadMessages, pendingConnections, billingRole, profile] = await Promise.all([
     env.DB.prepare(
       `SELECT n.id, n.delivered_at, n.read_at, c.title, c.body, c.category, c.priority, c.action_url
        FROM in_app_notifications n JOIN notification_campaigns c ON c.id = n.campaign_id
@@ -69,7 +69,9 @@ async function navigationState(request: Request, env: ApiEnvironment): Promise<R
        FROM users u LEFT JOIN platform_roles pr ON pr.user_id = u.id
          AND pr.revoked_at IS NULL AND pr.role IN ('system_admin', 'finance', 'support', 'auditor')
        WHERE u.id = ? AND (u.role = 'admin' OR pr.role IS NOT NULL) LIMIT 1`
-    ).bind(actor.id).first<{ role: string }>()
+    ).bind(actor.id).first<{ role: string }>(),
+    env.DB.prepare("SELECT preferred_locale FROM account_profiles WHERE user_id = ?")
+      .bind(actor.id).first<{ preferred_locale: string }>()
   ]);
   return json({
     user: {
@@ -77,7 +79,8 @@ async function navigationState(request: Request, env: ApiEnvironment): Promise<R
       email: actor.email,
       displayName: actor.display_name,
       avatarAssetId: actor.avatar_asset_id,
-      billingAccess: Boolean(billingRole)
+      billingAccess: Boolean(billingRole),
+      preferredLocale: profile?.preferred_locale ?? "en"
     },
     notifications: notifications.results,
     unreadNotificationCount: Number(unreadNotifications?.total ?? 0),

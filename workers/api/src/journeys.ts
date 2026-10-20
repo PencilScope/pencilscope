@@ -224,6 +224,26 @@ async function onboarding(request: Request, env: ApiEnvironment): Promise<Respon
   });
 }
 
+async function profileLanguage(request: Request, env: ApiEnvironment): Promise<Response> {
+  const user = await currentUser(request, env);
+  if (!user) return problem(401, "authentication_required", "Sign in to update your language.");
+  const input = await parseJson(request);
+  const locale = typeof input?.locale === "string" ? input.locale : "";
+  if (!["en", "zh-SG", "ms", "ta"].includes(locale)) {
+    return problem(400, "invalid_locale", "Choose a supported portal language.");
+  }
+  const now = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE account_profiles SET preferred_locale = ?, updated_at = ? WHERE user_id = ?")
+      .bind(locale, now, user.id),
+    env.DB.prepare(
+      `INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata_json, created_at)
+       VALUES (?, ?, 'preferences.language_updated', 'user', ?, ?, ?)`
+    ).bind(crypto.randomUUID(), user.id, user.id, JSON.stringify({ locale }), now)
+  ]);
+  return json({ locale });
+}
+
 async function profileContacts(request: Request, env: ApiEnvironment, pathname: string): Promise<Response | null> {
   if (pathname !== "/api/profile/contacts" && !/^\/api\/profile\/contacts\/[^/]+$/.test(pathname)) return null;
   const user = await currentUser(request, env);
@@ -2614,6 +2634,9 @@ export async function handleJourneyRequest(
   if (request.method === "GET" && pathname === "/api/me") return me(request, env);
   if ((request.method === "GET" || request.method === "POST") && pathname === "/api/onboarding") {
     return onboarding(request, env);
+  }
+  if (request.method === "POST" && pathname === "/api/profile/language") {
+    return profileLanguage(request, env);
   }
   if ((request.method === "GET" || request.method === "POST") && pathname === "/api/parents/students") {
     return parentStudents(request, env);

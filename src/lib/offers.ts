@@ -43,9 +43,9 @@ export type MarketplaceOfferItem = {
   endsAt?: string | null;
 };
 
-export const offerPrice = (offer: Pick<MarketplaceOffer, "priceCents" | "currency">) => offer.currency === "SGD"
-  ? `S$${new Intl.NumberFormat("en-SG", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(offer.priceCents / 100)}`
-  : new Intl.NumberFormat("en-SG", { style: "currency", currency: offer.currency }).format(offer.priceCents / 100);
+export const offerPrice = (offer: Pick<MarketplaceOffer, "priceCents" | "currency">, locale = "en-SG") => offer.currency === "SGD"
+  ? `S$${new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(offer.priceCents / 100)}`
+  : new Intl.NumberFormat(locale, { style: "currency", currency: offer.currency }).format(offer.priceCents / 100);
 
 export const offerAvailabilityLabel: Record<MarketplaceOffer["availability"], string> = {
   available: "Available",

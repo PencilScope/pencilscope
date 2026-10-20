@@ -3,9 +3,11 @@ import ProductIcon from "@/components/ProductIcon.astro";
 import { offerAvailabilityLabel, offerPrice, type MarketplaceOffer } from "@/lib/offers";
 import type { ProductIconName } from "@/lib/product-catalog";
 import { languageLabel } from "@/lib/languages";
+import { intlLocale, localeFromCookies } from "@/lib/i18n";
 
 type Props = { offer: MarketplaceOffer; compact?: boolean };
 const { offer, compact = false } = Astro.props;
+const displayLocale = intlLocale(localeFromCookies(Astro.cookies));
 const supportedIcons = new Set<ProductIconName>(["course", "online_course", "in_person_course", "video_course", "audio_book", "ebook", "quiz", "test", "mock_exam", "reading"]);
 const requestedFormat = offer.courseCount ? "course" : offer.formats[0] ?? "ebook";
 const primaryFormat: ProductIconName = supportedIcons.has(requestedFormat as ProductIconName) ? requestedFormat as ProductIconName : "course";
@@ -39,6 +41,6 @@ const languages = offer.languages.map(languageLabel).join(" + ") || "English";
       </div>
       <div class="offer-card-facts"><span>{languages}</span><span>{duration}</span></div>
     </div>
-    <footer><span>{offer.startsAt ? `Starts ${new Date(offer.startsAt).toLocaleDateString("en-SG")}` : "Start anytime"}</span><b>{offerPrice(offer)}</b></footer>
+    <footer><span>{offer.startsAt ? `Starts ${new Date(offer.startsAt).toLocaleDateString(displayLocale)}` : "Start anytime"}</span><b>{offerPrice(offer, displayLocale)}</b></footer>
   </a>
 </article>
