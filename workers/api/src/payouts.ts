@@ -72,7 +72,17 @@ async function ensureTutorProfile(env: ApiEnvironment, userId: string): Promise<
 
 export async function payoutAccountSummary(env: ApiEnvironment, userId: string) {
   await ensureTutorProfile(env, userId);
-  return publicAccount(await accountRow(env, userId));
+  let row = await accountRow(env, userId);
+  if (row?.stripe_account_id && env.STRIPE_SECRET_KEY) {
+    try { row = await syncStripeAccount(env, userId, row.stripe_account_id); }
+    catch (error) { console.warn("payout.account_sync_failed", { userId, error }); }
+  }
+  return publicAccount(row);
+}
+
+export async function creatorCanReceivePayouts(env: ApiEnvironment, userId: string): Promise<boolean> {
+  const account = await payoutAccountSummary(env, userId);
+  return account.status === "ready" && account.detailsSubmitted && account.payoutsEnabled;
 }
 
 export async function handlePayoutRequest(

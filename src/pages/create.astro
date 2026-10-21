@@ -46,6 +46,14 @@ const editorProductTypes = ["audio", "ebook", "reading", "video", "quiz", "test"
 const recentProduct = products.find((product) => product.id !== editProduct?.id);
 const selectedProductType = editProduct?.product_type ?? requestedProductType;
 const durationDefaults: Record<string, number> = { audio: 30, ebook: 60, reading: 15, video: 20, quiz: 10, test: 30, mock_exam: 60 };
+const contentStepLabel = ["quiz", "test", "mock_exam"].includes(selectedProductType) ? "Questions"
+  : selectedProductType === "audio" ? "Audio"
+    : selectedProductType === "video" ? "Video"
+      : selectedProductType === "ebook" ? "Book content" : "Content";
+const contentStepTitle = ["quiz", "test", "mock_exam"].includes(selectedProductType) ? "Build the assessment"
+  : selectedProductType === "audio" ? "Add audio chapters or tracks"
+    : selectedProductType === "video" ? "Add the video learning content"
+      : selectedProductType === "ebook" ? "Add the ebook content" : "Add the learning content";
 const suggestedSubject = editProduct?.subject ?? recentProduct?.subject ?? "";
 const suggestedAudience = editProduct?.audience ?? recentProduct?.audience ?? "";
 const suggestedDuration = editProduct?.estimated_minutes ?? durationDefaults[selectedProductType] ?? 20;
@@ -62,11 +70,11 @@ const suggestedDuration = editProduct?.estimated_minutes ?? durationDefaults[sel
 
   <section class="shell creator-hub-layout" id="create-product">
     <main class="panel create-product-panel">
-      <div class="create-panel-heading"><div><span class="eyebrow">Learning product</span><h2>{editProduct ? `Edit ${editProduct.title}` : `Create ${learningProductMeta[requestedProductType].label.toLowerCase()}`}</h2></div><CreateWithAI compact /></div>
+      <div class="create-panel-heading"><div class="product-heading-with-icon"><ProductIcon name={productCatalogueKey(selectedProductType)} size="large" /><div><span class="eyebrow">Creator Studio · {learningProductMeta[selectedProductType].label}</span><h2>{editProduct ? `Edit ${editProduct.title}` : `Create ${learningProductMeta[requestedProductType].label.toLowerCase()}`}</h2><small>Details, content, review and publication use the same guided workspace as courses.</small></div></div><CreateWithAI compact /></div>
       {editId && !editProduct && <p class="form-error">That product is unavailable or you do not have permission to edit it.</p>}
       <form class="stack-form product-create-form" data-edit-id={editProduct?.id ?? ""} data-library-item-id={selectedLibraryItem?.id ?? ""} data-questions={JSON.stringify(editProduct?.questions ?? [])} novalidate>
         <ol class="product-stepper" aria-label="Product creation progress">
-          {["Format", "Details", "Content", "Review"].map((label, index) => <li data-step-item={index + 1}><button type="button" data-step-target={index + 1}><span>{index + 1}</span><strong>{label}</strong></button></li>)}
+          {["Format", "Details", contentStepLabel, "Review"].map((label, index) => <li data-step-item={index + 1}><button type="button" data-step-target={index + 1}><span>{index + 1}</span><strong>{label}</strong></button></li>)}
         </ol>
         <p class="stepper-save-status" aria-live="polite">{editProduct ? "Draft loaded. Changes stay private until you publish." : "Your first draft will be saved after product details."}</p>
 
@@ -96,7 +104,7 @@ const suggestedDuration = editProduct?.estimated_minutes ?? durationDefaults[sel
         </section>
 
         <section class="product-step-panel" data-step-panel="3" hidden>
-          <div class="product-step-heading"><span class="eyebrow">Step 3 of 4</span><h3>Add the learning content</h3><p>Choose a file from your private library or provide one trusted content link.</p></div>
+          <div class="product-step-heading"><span class="eyebrow">Step 3 of 4 · {learningProductMeta[selectedProductType].label}</span><h3>{contentStepTitle}</h3><p>{["quiz", "test", "mock_exam"].includes(selectedProductType) ? "Add questions, answers, explanations and optional image, video or audio media." : "Choose a file from your private library or provide one trusted content link."}</p></div>
           <section class="resource-fields">
             {selectedLibraryItem && <p class="library-selection-banner"><span aria-hidden="true">▦</span><span><strong>Using {selectedLibraryItem.title}</strong><small>Private Content Library · {selectedLibraryItem.mediaType}</small></span><a href="/content-library">Change</a></p>}
             <label>Content URL <small>Use this only when the content is hosted elsewhere.</small><input name="contentUrl" type="url" placeholder="https://…" value={editProduct?.content_url ?? (selectedLibraryItem?.contentUrl ? new URL(selectedLibraryItem.contentUrl, Astro.url.origin).toString() : "")} /></label>

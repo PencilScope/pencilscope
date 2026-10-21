@@ -1515,9 +1515,9 @@ async function tutorAuthoring(
       ).bind(courseId).all(),
       env.DB.prepare(
         `SELECT p.id, p.slug, p.title, p.description, p.product_type, p.estimated_minutes,
-          p.price_cents, p.currency, p.status
+          p.price_cents, p.currency, p.status, p.listing_status
          FROM learning_products p
-         WHERE p.status = 'published' AND (p.creator_id = ? OR ? = 'admin')
+         WHERE p.status != 'archived' AND (p.creator_id = ? OR ? = 'admin')
          ORDER BY p.updated_at DESC, p.title`
       ).bind(actor.id, actor.role).all(),
       env.DB.prepare(
@@ -2084,6 +2084,8 @@ async function tutorAuthoring(
     const capacity = input?.capacity === null || input?.capacity === "" || input?.capacity === undefined
       ? null : Number(input.capacity);
     const plannedPaidLearners = Number(input?.plannedPaidLearners ?? capacity ?? 1);
+    const learningProductIds = Array.isArray(input?.learningProductIds)
+      ? [...new Set(input.learningProductIds.map(String).filter(Boolean))] : [];
     if (!title || !Number.isSafeInteger(creatorPriceCents) ||
         (capacity !== null && (!Number.isInteger(capacity) || capacity < 1)) ||
         ((offeringType === "cohort" || offeringType === "event") && (!startsAt || !endsAt)) ||
@@ -2091,6 +2093,16 @@ async function tutorAuthoring(
         (offeringType === "academic_term" && (!Number.isInteger(academicYear) || academicYear < 2000 || academicYear > 2200 ||
           !Number.isInteger(termNumber) || termNumber < 1 || termNumber > 12))) {
       return problem(400, "invalid_offering", "Provide a valid offering type, schedule, title, capacity, and price.");
+    }
+    if (learningProductIds.length) {
+      const placeholders = learningProductIds.map(() => "?").join(",");
+      const ownedProducts = await env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM learning_products
+         WHERE creator_id = ? AND status != 'archived' AND id IN (${placeholders})`
+      ).bind(actor.id, ...learningProductIds).first<{ total: number }>();
+      if (Number(ownedProducts?.total ?? 0) !== learningProductIds.length) {
+        return problem(400, "invalid_bundle_products", "Choose active learning products you own.");
+      }
     }
     let pricing;
     try {
@@ -2108,7 +2120,7 @@ async function tutorAuthoring(
     const internalTerm = isAcademic ? termNumber : 0;
     const termId = isAcademic ? `academic-term-${academicYear}-${termNumber}` : `academic-term-general-${id}`;
     const accessEndsAt = typeof input?.accessEndsAt === "string" && input.accessEndsAt ? input.accessEndsAt : endsAt;
-    await env.DB.batch([
+    const offeringStatements = [
       env.DB.prepare(
         `INSERT INTO academic_terms (id, academic_year, term_number, title, starts_at, ends_at, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(academic_year, term_number) DO NOTHING`
@@ -2134,7 +2146,12 @@ async function tutorAuthoring(
         typeof input?.timezone === "string" && input.timezone ? input.timezone.slice(0, 80) : "Asia/Singapore",
         capacity, now, now
       )
-    ]);
+    ];
+    learningProductIds.forEach((productId, index) => offeringStatements.push(env.DB.prepare(
+      `INSERT INTO course_offering_learning_products
+        (course_offering_id, learning_product_id, position) VALUES (?, ?, ?)`
+    ).bind(id, productId, index + 1)));
+    await env.DB.batch(offeringStatements);
     return json({ offering: {
       id, courseId, title, offeringType, deliveryMode,
       academicYear: isAcademic ? academicYear : null,

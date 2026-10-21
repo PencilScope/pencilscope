@@ -18,6 +18,11 @@ const googleResponse = await requestApi("/api/integrations/google/status", { use
 const googleIntegration = googleResponse.ok
   ? (await googleResponse.json<{ integration: { google_email: string; status: string } | null }>()).integration
   : null;
+const payoutResponse = await requestApi("/api/creator/payout-account", { userId });
+const payoutAccount = payoutResponse.ok
+  ? (await payoutResponse.json<{ payoutAccount: { status: string; payoutsEnabled: boolean } }>()).payoutAccount
+  : { status: "not_configured", payoutsEnabled: false };
+const payoutReady = payoutAccount.status === "ready" && payoutAccount.payoutsEnabled;
 const creatorProductsResponse = await requestApi("/api/creator/learning-products", { userId });
 const creatorProducts = creatorProductsResponse.ok
   ? (await creatorProductsResponse.json<{ products: LearningProduct[] }>()).products
@@ -89,7 +94,7 @@ let studio: {
   offeringMaterials: Array<{ course_offering_id: string; material_id: string }>;
   learningProducts: Array<{
     id: string; slug: string; title: string; description: string; product_type: LearningProductType;
-    estimated_minutes: number | null; price_cents: number; currency: string; status: string;
+    estimated_minutes: number | null; price_cents: number; currency: string; status: string; listing_status: string;
   }>;
   offeringLearningProducts: Array<{
     course_offering_id: string; learning_product_id: string; position: number; release_at: string | null;
@@ -339,13 +344,15 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
 
           {activeSection === "offerings" && <article class="panel">
             <span class="eyebrow">Step 3 of 4 · Schedule and price</span><h2>Plan the learner offer</h2>
-            <p class="studio-description">Sensible defaults are ready for an online cohort. Review the schedule, meeting allowance and suggested tuition before saving.</p>
+            <p class="studio-description">Start with this course, optionally add more learning products, then review the schedule and price. Nothing becomes purchasable until the completed offer is published.</p>
+            {!payoutReady && <aside class="payout-readiness-notice"><div><strong>Set up payouts before opening paid enrolment</strong><p>You can prepare and save this offer now. Stripe identity and bank verification is required only when you publish it.</p></div><a class="button button-small" href="/payments">Set up payouts</a></aside>}
             <form class="inline-form api-form offering-default-form" data-kind="offering" action={`/api/tutor/courses/${studio.course.id}/offerings`} method="post">
               <label>Offer title<input name="title" required value={`${studio.course.title} – Online cohort`} /></label>
               <label>Access model<select name="offeringType"><option value="self_paced">Self-paced access</option><option value="cohort" selected={studio.course.delivery_mode === "live"}>Scheduled cohort</option><option value="event">Single event / seminar</option><option value="academic_term">Academic term</option></select></label>
               <label>Delivery<select name="deliveryMode"><option value="recorded">Recorded</option><option value="live_online" selected={studio.course.delivery_mode === "live"}>Live online</option><option value="in_person">In person</option><option value="hybrid" selected={studio.course.delivery_mode === "hybrid"}>Hybrid</option></select></label>
               <input name="academicYear" type="number" min="2000" max="2200" value={new Date().getFullYear()} placeholder="Year (terms only)" />
               <input name="termNumber" type="number" min="1" max="12" value="1" placeholder="Term (terms only)" />
+              <fieldset class="offer-bundle-picker"><legend>Products included before pricing</legend><div class="primary-offer-product"><ProductIcon name={productCatalogueKey("course", studio.course.delivery_mode)} size="small" /><span><strong>{studio.course.title}</strong><small>Primary course · always included</small></span></div>{studio.learningProducts.length ? <div class="offer-product-options">{studio.learningProducts.map((product) => <label><input type="checkbox" name="learningProductIds" value={product.id} /><ProductIcon name={productCatalogueKey(product.product_type)} size="small" /><span><strong>{product.title}</strong><small>{learningProductMeta[product.product_type].label} · {product.status === "draft" ? "Draft—must be completed before publishing" : product.listing_status === "unpublished" ? "Unpublished—must be reopened" : "Content ready"}</small></span></label>)}</div> : <p class="form-message">No additional products yet. This course can still be sold independently.</p>}<small>Selecting one or more additional products creates a bundle. Draft items are allowed while preparing the offer.</small></fieldset>
               <label>Suggested tuition (SGD)<input name="priceSGD" type="number" min="0.50" step="0.01" value="50" required /><small>Editable suggestion. Confirm the commercial decision before publishing.</small></label>
               <label>Capacity<input name="capacity" type="number" min="1" value="20" /></label>
               <label>Total live minutes<input name="plannedMeetingMinutes" type="number" min="0" value={studio.course.delivery_mode === "live" ? "240" : "0"} /></label>
@@ -357,7 +364,7 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
             <div class="term-grid studio-terms">{studio.offerings.map((offering) => (
               <section class:list={["term-card", { active: offering.id === selectedOfferingId }]}>
                  <a href={studioUrl("offerings", offering.id)}><span>{offering.offering_type.replace("_", " ")} · {offering.delivery_mode.replace("_", " ")}</span><h3>{offering.title}</h3><strong>{new Intl.NumberFormat("en-SG", { style: "currency", currency: offering.currency }).format(offering.price_cents / 100)}</strong><small>Tuition {(offering.creator_price_cents / 100).toFixed(2)} + platform {(offering.platform_fixed_fee_cents / 100).toFixed(2)} + service {(offering.service_fee_cents / 100).toFixed(2)}{offering.planned_meeting_cost_cents ? ` + planned meeting allocation` : ""}</small><small>{offering.status} · {offering.pricing_status}{offering.capacity ? ` · ${offering.capacity} places` : ""}</small><small>{offering.enrolment_opens_at ? `Bookings open ${new Date(offering.enrolment_opens_at).toLocaleString("en-SG")}` : "Bookings open immediately after publishing"}{offering.enrolment_closes_at ? ` · close ${new Date(offering.enrolment_closes_at).toLocaleString("en-SG")}` : ""}{offering.access_ends_at ? ` · access ends ${new Date(offering.access_ends_at).toLocaleString("en-SG")}` : ""}</small></a>
-                {offering.status !== "published" && <form class="api-form publish-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="text-link" type="submit">Open paid enrolment</button><p class="form-message"></p></form>}
+                {offering.status !== "published" && <form class="api-form publish-form" action={`/api/tutor/offerings/${offering.id}/publish`} method="post"><button class="text-link" type="submit" disabled={!payoutReady}>Open paid enrolment</button><p class="form-message">{!payoutReady ? "Complete payout setup to publish." : ""}</p></form>}
               </section>
             ))}</div>
             {selectedOffering && <p class="form-success">Authoring content and sessions for <strong>{selectedOffering.title}</strong>.</p>}
@@ -719,8 +726,10 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
           delete body.categorySlug;
         }
         if (form.dataset.kind === "offering") {
+          const formData = new FormData(form);
           body = {
             ...values,
+            learningProductIds: formData.getAll("learningProductIds").map(String),
             academicYear: Number(values.academicYear),
             termNumber: Number(values.termNumber),
             capacity: values.capacity ? Number(values.capacity) : null,

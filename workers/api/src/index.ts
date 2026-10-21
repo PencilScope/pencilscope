@@ -34,7 +34,7 @@ import { handleStorageSubscriptionRequest, processStorageCheckout, syncStorageSu
 import { calculateOfferingPrice } from "./platform-pricing";
 import { handleGoogleMeetRequest, sendSessionReminders } from "./google-meet";
 import { handleActionHistoryRequest } from "./action-history";
-import { handlePayoutRequest } from "./payouts";
+import { creatorCanReceivePayouts, handlePayoutRequest } from "./payouts";
 import { handleContactEnquiryRequest } from "./contact-enquiries";
 import { handleProductOfferRequest } from "./product-offers";
 import { handleMarketplaceOfferRequest } from "./marketplace-offers";
@@ -822,6 +822,9 @@ async function createCourse(request: Request, env: ApiEnvironment): Promise<Resp
   } catch (error) {
     return problem(400, "invalid_course", error instanceof Error ? error.message : "Invalid course details.");
   }
+  if (input.publish && input.priceCents > 0 && !await creatorCanReceivePayouts(env, actor.id)) {
+    return problem(409, "payout_setup_required", "Complete Stripe payout setup before publishing a paid course.");
+  }
 
   const id = crypto.randomUUID();
   const slug = slugifyCourse(input.title, id);
@@ -955,6 +958,10 @@ async function publishCourse(request: Request, env: ApiEnvironment, id: string):
       }
     });
   }
+  if (Number(course.creator_price_cents || course.price_cents) > 0 &&
+      !await creatorCanReceivePayouts(env, String(course.tutor_id ?? actor.id))) {
+    return problem(409, "payout_setup_required", "Complete Stripe payout setup before publishing a paid course.");
+  }
 
   try {
     const breakdown = calculateOfferingPrice(env, course.creator_price_cents || course.price_cents);
@@ -1068,7 +1075,7 @@ async function publishOffering(request: Request, env: ApiEnvironment, id: string
   const offering = await env.DB.prepare(
     `SELECT o.id, o.course_id, o.title, o.price_cents, o.currency, o.pricing_version,
       o.stripe_price_id, c.title AS course_title, c.description AS course_description,
-      c.subject AS course_subject, c.primary_level AS course_audience,
+      c.subject AS course_subject, c.primary_level AS course_audience, c.tutor_id,
       c.stripe_product_id
      FROM course_offerings o JOIN courses c ON c.id = o.course_id
      WHERE o.id = ? AND (c.tutor_id = ? OR ? = 'admin') AND o.status != 'archived'`
@@ -1082,6 +1089,10 @@ async function publishOffering(request: Request, env: ApiEnvironment, id: string
   }
   if (!Number.isSafeInteger(offering.price_cents) || offering.price_cents < 50) {
     return problem(409, "offering_price_required", "Set a valid offer price before publishing.");
+  }
+  const payoutOwnerId = String((offering as OfferingPricingRecord & { tutor_id?: string }).tutor_id ?? actor.id);
+  if (!await creatorCanReceivePayouts(env, payoutOwnerId)) {
+    return problem(409, "payout_setup_required", "Complete Stripe payout setup before publishing a paid offer.");
   }
   const readiness = await env.DB.prepare(
     `SELECT o.status,

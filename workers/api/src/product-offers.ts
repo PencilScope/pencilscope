@@ -2,6 +2,7 @@ import { getCreatorActorById } from "../../../src/lib/auth";
 import { archivePreviousStripePrice, persistSyncedOfferingPricing, syncOfferingPricing, type OfferingPricingRecord } from "../../../src/lib/course-pricing";
 import { json, problem } from "../../../src/lib/http";
 import type { ApiEnvironment } from "./index";
+import { creatorCanReceivePayouts } from "./payouts";
 
 type OfferInput = {
   title?: unknown; description?: unknown; priceCents?: unknown; currency?: unknown;
@@ -208,6 +209,9 @@ async function removeItem(env: ApiEnvironment, creatorId: string, id: string, pr
 async function publishOffer(env: ApiEnvironment, creatorId: string, id: string) {
   const offer = await offerDetail(env.DB, id, creatorId);
   if (!offer) return problem(404, "offer_not_found", "Offer not found.");
+  if (Number(offer.price_cents) > 0 && !await creatorCanReceivePayouts(env, creatorId)) {
+    return problem(409, "payout_setup_required", "Complete Stripe payout setup before publishing a paid offer.");
+  }
   const ids = (offer.items as Array<{ id: string }>).map((item) => item.id);
   if (!await validateProducts(env.DB, creatorId, ids, true)) return problem(409, "products_not_ready", "Every included product must be published and listed before this offer can be published.");
   const courseOfferingIds = (offer.courseItems as Array<{ course_offering_id: string }>).map((item) => item.course_offering_id);

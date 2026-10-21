@@ -358,6 +358,25 @@ try {
     publishedProducts.push({ id: created.product.id, slug: created.product.slug, type: entry.type, assessment: Boolean(entry.assessment) });
   }
 
+  const prepricedBundleOffering = await json(await api(`/api/tutor/courses/${encodeURIComponent(unpricedCourseId)}/offerings`, {
+    method: "POST",
+    body: {
+      title: "Course with selected learning products", offeringType: "self_paced", deliveryMode: "recorded",
+      priceCents: 6500, capacity: 30, plannedPaidLearners: 30,
+      learningProductIds: [publishedProducts[0].id]
+    }
+  }), 201);
+  const bundledCourseStudio = await json(await api(`/api/tutor/courses/${encodeURIComponent(unpricedCourseId)}/studio`));
+  assert.ok(bundledCourseStudio.offeringLearningProducts.some((item) =>
+    item.course_offering_id === prepricedBundleOffering.offering.id &&
+    item.learning_product_id === publishedProducts[0].id
+  ), "Course offers should capture additional bundle products before publication");
+  const blockedPaidCourseOffer = await api(`/api/tutor/offerings/${encodeURIComponent(prepricedBundleOffering.offering.id)}/publish`, {
+    method: "POST", body: {}
+  });
+  assert.equal(blockedPaidCourseOffer.status, 409);
+  assert.equal((await blockedPaidCourseOffer.json()).error.code, "payout_setup_required");
+
   const ebookDraft = await json(await api("/api/creator/ebooks", {
     method: "POST",
     body: {
@@ -404,6 +423,11 @@ try {
   }), 201);
   assert.equal(courseBundle.offer.product_count, 2);
   assert.equal(courseBundle.offer.courseItems.length, 1);
+  const blockedBundlePublish = await api(`/api/creator/product-offers/${encodeURIComponent(courseBundle.offer.id)}/publish`, {
+    method: "POST", body: {}
+  });
+  assert.equal(blockedBundlePublish.status, 409);
+  assert.equal((await blockedBundlePublish.json()).error.code, "payout_setup_required");
   const courseRelatedOffers = await json(await api(`/api/creator/product-offers?courseId=${encodeURIComponent(bundleCourse.course_id)}`));
   assert.ok(courseRelatedOffers.offers.some((offer) => offer.id === courseBundle.offer.id));
   const publicOffers = await json(await api("/api/offers", { headers: {} }));
