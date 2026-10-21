@@ -1068,11 +1068,18 @@ async function publishOffering(request: Request, env: ApiEnvironment, id: string
   const offering = await env.DB.prepare(
     `SELECT o.id, o.course_id, o.title, o.price_cents, o.currency, o.pricing_version,
       o.stripe_price_id, c.title AS course_title, c.description AS course_description,
+      c.subject AS course_subject, c.primary_level AS course_audience,
       c.stripe_product_id
      FROM course_offerings o JOIN courses c ON c.id = o.course_id
      WHERE o.id = ? AND (c.tutor_id = ? OR ? = 'admin') AND o.status != 'archived'`
   ).bind(id, actor.id, actor.role).first<OfferingPricingRecord>();
   if (!offering) return problem(404, "offering_not_found", "The course offering does not exist.");
+  const draftDetails = offering as OfferingPricingRecord & { course_subject?: string; course_audience?: string };
+  if (offering.course_title.trim().toLowerCase() === "new online course" &&
+      draftDetails.course_subject?.trim().toLowerCase() === "general learning" &&
+      draftDetails.course_audience?.trim().toLowerCase() === "general learners") {
+    return problem(409, "course_details_review_required", "Review the working course title, topic and audience before publishing.");
+  }
   if (!Number.isSafeInteger(offering.price_cents) || offering.price_cents < 50) {
     return problem(409, "offering_price_required", "Set a valid offer price before publishing.");
   }

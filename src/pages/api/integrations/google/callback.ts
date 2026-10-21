@@ -7,16 +7,23 @@ export const GET: APIRoute = async ({ request, locals, session, redirect }) => {
   const expectedState = await session?.get("googleIntegrationState");
   const verifier = await session?.get("googleIntegrationVerifier");
   const startedAt = Number(await session?.get("googleIntegrationStartedAt"));
+  const requestedNext = await session?.get("googleIntegrationNext");
+  const next = typeof requestedNext === "string" && requestedNext.startsWith("/") && !requestedNext.startsWith("//") && !requestedNext.includes("\\")
+    ? requestedNext
+    : "/profile";
   const clear = () => {
     session?.delete("googleIntegrationState");
     session?.delete("googleIntegrationVerifier");
     session?.delete("googleIntegrationStartedAt");
+    session?.delete("googleIntegrationNext");
   };
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   if (url.searchParams.get("error") || url.searchParams.get("state") !== expectedState || !code || typeof verifier !== "string" || !Number.isFinite(startedAt) || Date.now() - startedAt > 10 * 60_000) {
     clear();
-    return redirect("/profile?error=Google%20Calendar%20connection%20was%20cancelled%20or%20expired.", 303);
+    const destination = new URL(next, request.url);
+    destination.searchParams.set("error", "Google Calendar connection was cancelled or expired.");
+    return redirect(`${destination.pathname}${destination.search}`, 303);
   }
   const env = getEnv(locals);
   const response = await env.API.fetch("https://pencilscope-api.internal/api/integrations/google/exchange", {
@@ -26,5 +33,7 @@ export const GET: APIRoute = async ({ request, locals, session, redirect }) => {
   });
   const result = await response.json<{ error?: { message?: string } }>();
   clear();
-  return response.ok ? redirect("/profile?google=connected", 303) : redirect(`/profile?error=${encodeURIComponent(result.error?.message ?? "Google Calendar could not be connected.")}`, 303);
+  const destination = new URL(next, request.url);
+  destination.searchParams.set(response.ok ? "google" : "error", response.ok ? "connected" : result.error?.message ?? "Google Calendar could not be connected.");
+  return redirect(`${destination.pathname}${destination.search}`, 303);
 };

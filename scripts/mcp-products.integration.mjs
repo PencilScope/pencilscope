@@ -161,6 +161,9 @@ try {
   assert.ok(toolsPayload.result.tools.some((tool) => tool.name === "republish_product"));
   assert.ok(toolsPayload.result.tools.some((tool) => tool.name === "create_product_offer"));
   assert.ok(toolsPayload.result.tools.some((tool) => tool.name === "publish_product_offer"));
+  for (const courseTool of ["get_google_calendar_connection_status", "create_course_draft", "create_course_offering", "assign_offering_content", "add_course_session", "publish_course_offering"]) {
+    assert.ok(toolsPayload.result.tools.some((tool) => tool.name === courseTool), `${courseTool} must be exposed`);
+  }
 
   const listTool = toolsPayload.result.tools.find((tool) => tool.name === "list_my_products");
   assert.ok(listTool.inputSchema.properties.productType.enum.includes("online_course"));
@@ -202,6 +205,28 @@ try {
   assert.equal(courseReadiness.isError, undefined);
   assert.equal(courseReadiness.structuredContent.ready, true);
   assert.match(courseReadiness.structuredContent.nextStep, /course offering/i);
+
+  const googleStatus = await callTool("get_google_calendar_connection_status", {});
+  assert.equal(googleStatus.isError, undefined);
+  assert.equal(googleStatus.structuredContent.connected, false);
+  assert.match(googleStatus.structuredContent.connectUrl, /integrations\/google\/start/);
+
+  const courseStart = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  const courseEnd = new Date(Date.now() + 35 * 24 * 60 * 60 * 1000).toISOString();
+  const courseOffer = await callTool("create_course_offering", {
+    courseId: "mcp-python-course", title: "Python live cohort", offeringType: "cohort",
+    deliveryMode: "live_online", priceCents: 5000, startsAt: courseStart, endsAt: courseEnd,
+    enrolmentOpensAt: now, enrolmentClosesAt: courseStart, accessEndsAt: courseEnd,
+    timezone: "Asia/Singapore", capacity: 20, plannedMeetingMinutes: 240,
+    plannedMeetingParticipants: 21, plannedPaidLearners: 20
+  });
+  assert.equal(courseOffer.isError, undefined, JSON.stringify(courseOffer));
+  assert.equal(courseOffer.structuredContent.offering.status, "draft");
+  const courseOfferingId = courseOffer.structuredContent.offering.id;
+  const assignedModule = await callTool("assign_offering_content", {
+    offeringId: courseOfferingId, kind: "module", contentId: "mcp-python-module", position: 1
+  });
+  assert.equal(assignedModule.isError, undefined, JSON.stringify(assignedModule));
 
   const wrongPublishTool = await callTool("publish_product", {
     productId: "mcp-python-course", confirm: true

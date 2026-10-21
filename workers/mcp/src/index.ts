@@ -409,6 +409,14 @@ const tools = [
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false }
   },
   {
+    name: "get_google_calendar_connection_status",
+    title: "Check Google Calendar and Meet connection",
+    description: "Check whether the signed-in course creator can create Google Meet sessions. Returns a direct connection URL when setup is required.",
+    inputSchema: { type: "object", additionalProperties: false, properties: {} },
+    securitySchemes: authSchemes(["courses:write"]),
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
+  },
+  {
     name: "create_course_draft",
     title: "Create an online, in-person or video course draft",
     description: "Create an unpublished PencilScope online course, in-person course or video course shell. Pricing is configured later through an offer; this tool never publishes.",
@@ -556,6 +564,7 @@ const requiredScope: Record<string, string[]> = {
   remove_product_from_offer: ["products:write"],
   publish_product_offer: ["products:publish"],
   unpublish_product_offer: ["products:publish"],
+  get_google_calendar_connection_status: ["courses:write"],
   create_course_draft: ["courses:write"],
   create_course_offering: ["courses:write"],
   update_course_offering: ["courses:write"],
@@ -1175,6 +1184,21 @@ async function executeTool(
     const response = await callApi(env, context, `/api/creator/product-offers/${encodeURIComponent(offerId)}/${action}`, "POST");
     return { result: contentResult(response.data, response.ok ? (action === "publish" ? "Product offer published and priced." : "Product offer closed to new purchases.") : response.data?.error?.message ?? "Offer action failed.", !response.ok), entityId: offerId, errorCode: response.ok ? undefined : response.errorCode };
   }
+  if (name === "get_google_calendar_connection_status") {
+    const response = await callApi(env, context, "/api/integrations/google/status", "GET");
+    const connected = response.ok && response.data?.integration?.status === "active";
+    const data = {
+      connected,
+      googleEmail: connected ? response.data.integration.google_email : null,
+      connectUrl: connected ? null : `${env.AUTHORIZATION_SERVER}/api/integrations/google/start`
+    };
+    return {
+      result: contentResult(data, connected
+        ? `Google Calendar and Meet are connected${data.googleEmail ? ` as ${data.googleEmail}` : ""}.`
+        : "Google Calendar and Meet are not connected. Ask the creator to open connectUrl before scheduling an online session.", !response.ok),
+      errorCode: response.ok ? undefined : response.errorCode
+    };
+  }
   if (name === "create_course_draft") {
     const courseType = String(args.courseType ?? "video_course");
     const deliveryMode = courseType === "online_course" ? "live" : courseType === "in_person_course" ? "hybrid" : "self-paced";
@@ -1345,7 +1369,7 @@ async function handleMcp(request: Request, env: Environment): Promise<Response> 
       supportedVersions: ["2026-07-28", "2025-11-25"],
       serverInfo: { name: "pencilscope-creator", version: "1.0.0" },
       capabilities: { tools: {} },
-      instructions: "Create drafts first. Use list_my_products to rediscover every standalone product or course draft by title or ID before creating a possible duplicate. Products are priced independently from content: use create_product_offer with one standalone product or course offering for independent sale, or multiple items for a bundle, then publish_product_offer only after confirmation. For courses, create and publish a course offering; use list_product_offers to find eligible published course offering IDs. To add a new file, use begin_content_upload, upload every base64 part, then complete_content_upload; use get_content_upload to resume. Use list_content_library to select reusable resources by ID; never request or reveal storage keys. Online sessions create Google Meet and require connected Google Calendar; in-person sessions require a venue. Return every created ID and Creator Studio URL. Read before editing. Never publish, unpublish, close or delete unless the user explicitly confirms."
+      instructions: "Create drafts first. Use list_my_products to rediscover every standalone product or course draft by title or ID before creating a possible duplicate. Products are priced independently from content: use create_product_offer with one standalone product or course offering for independent sale, or multiple items for a bundle, then publish_product_offer only after confirmation. For courses, create and publish a course offering; use list_product_offers to find eligible published course offering IDs. Before adding an online session, call get_google_calendar_connection_status and give the creator its connectUrl when needed. To add a new file, use begin_content_upload, upload every base64 part, then complete_content_upload; use get_content_upload to resume. Use list_content_library to select reusable resources by ID; never request or reveal storage keys. Online sessions create Google Meet and require connected Google Calendar; in-person sessions require a venue. Return every created ID and Creator Studio URL. Read before editing. Never publish, unpublish, close or delete unless the user explicitly confirms."
     });
   }
   if (message.method === "initialize") {
@@ -1353,7 +1377,7 @@ async function handleMcp(request: Request, env: Environment): Promise<Response> 
       protocolVersion: "2025-11-25",
       serverInfo: { name: "pencilscope-creator", version: "1.0.0" },
       capabilities: { tools: {} },
-      instructions: "Create drafts first. Use list_my_products to rediscover every standalone product or course draft by title or ID before creating a possible duplicate. Products are priced independently from content: use create_product_offer with one standalone product or course offering for independent sale, or multiple items for a bundle, then publish_product_offer only after confirmation. For courses, create and publish a course offering; use list_product_offers to find eligible published course offering IDs. To add a new file, use begin_content_upload, upload every base64 part, then complete_content_upload; use get_content_upload to resume. Use list_content_library to select reusable resources by ID; never request or reveal storage keys. Online sessions create Google Meet and require connected Google Calendar; in-person sessions require a venue. Return every created ID and Creator Studio URL. Read before editing. Never publish, unpublish, close or delete unless the user explicitly confirms."
+      instructions: "Create drafts first. Use list_my_products to rediscover every standalone product or course draft by title or ID before creating a possible duplicate. Products are priced independently from content: use create_product_offer with one standalone product or course offering for independent sale, or multiple items for a bundle, then publish_product_offer only after confirmation. For courses, create and publish a course offering; use list_product_offers to find eligible published course offering IDs. Before adding an online session, call get_google_calendar_connection_status and give the creator its connectUrl when needed. To add a new file, use begin_content_upload, upload every base64 part, then complete_content_upload; use get_content_upload to resume. Use list_content_library to select reusable resources by ID; never request or reveal storage keys. Online sessions create Google Meet and require connected Google Calendar; in-person sessions require a venue. Return every created ID and Creator Studio URL. Read before editing. Never publish, unpublish, close or delete unless the user explicitly confirms."
     });
   }
   if (message.method === "notifications/initialized") return new Response(null, { status: 202, headers: cors() });

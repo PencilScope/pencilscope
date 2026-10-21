@@ -14,6 +14,10 @@ const dashboard = await dashboardResponse.json<{
   user: { id: string; role: string; display_name: string };
   creatorCourses?: Array<{ id: string; title: string; status: string; pricing_status: string; enrolment_count: number }>;
 }>();
+const googleResponse = await requestApi("/api/integrations/google/status", { userId });
+const googleIntegration = googleResponse.ok
+  ? (await googleResponse.json<{ integration: { google_email: string; status: string } | null }>()).integration
+  : null;
 const creatorProductsResponse = await requestApi("/api/creator/learning-products", { userId });
 const creatorProducts = creatorProductsResponse.ok
   ? (await creatorProductsResponse.json<{ products: LearningProduct[] }>()).products
@@ -30,6 +34,11 @@ const createMode = Astro.url.searchParams.get("mode") === "new";
 const requestedCourseProduct = Astro.url.searchParams.get("product");
 const requestedCourseDelivery = courseDeliveryModeForProduct(requestedCourseProduct);
 const requestedCourseLabel = creatorProductCatalogue.find((item) => item.key === requestedCourseProduct)?.label ?? "Course";
+const requestedCourseDescription = requestedCourseProduct === "in_person_course"
+  ? "An instructor-led in-person learning experience designed for general learners."
+  : requestedCourseProduct === "video_course"
+    ? "A self-paced video learning experience designed for general learners."
+    : "A live online learning experience designed for general learners.";
 const studioSections = ["overview", "offerings", "curriculum", "assessments", "results", "resources", "sessions", "learners", "team", "publish"] as const;
 type StudioSection = typeof studioSections[number];
 const requestedSection = Astro.url.searchParams.get("section");
@@ -165,6 +174,23 @@ if (selectedId) {
 const requestedOfferingId = Astro.url.searchParams.get("offeringId");
 const selectedOfferingId = requestedOfferingId ?? studio?.offerings[0]?.id ?? "";
 const selectedOffering = studio?.offerings.find((offering) => offering.id === selectedOfferingId);
+const formatSingaporeInput = (value: Date): string => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Singapore", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(value);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`;
+};
+const defaultBookingOpen = new Date();
+const defaultCourseStart = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+const defaultCourseEnd = new Date(defaultCourseStart.getTime() + 28 * 24 * 60 * 60 * 1000);
+const defaultBookingClose = new Date(defaultCourseStart.getTime() - 60 * 60 * 1000);
+const defaultAccessEnd = new Date(defaultCourseEnd.getTime() + 7 * 24 * 60 * 60 * 1000);
+const selectedSessions = studio?.sessions.filter((session) => session.course_offering_id === selectedOfferingId) ?? [];
+const latestSessionEnd = selectedSessions.reduce((latest, session) => Math.max(latest, Date.parse(session.ends_at)), 0);
+const defaultSessionStart = new Date(latestSessionEnd ? latestSessionEnd + 7 * 24 * 60 * 60 * 1000 : defaultCourseStart.getTime());
+const defaultSessionEnd = new Date(defaultSessionStart.getTime() + 60 * 60 * 1000);
 const selectedLearningProductIds = new Set(
   studio?.offeringLearningProducts
     .filter((link) => link.course_offering_id === selectedOfferingId)
@@ -189,13 +215,18 @@ const creatorProductStatus = (product: LearningProduct) =>
 const creatorProductHref = (product: LearningProduct) => product.status === "draft"
   ? `/create?edit=${encodeURIComponent(product.id)}#create-product`
   : `/dashboard?workspace=creation&section=product&productId=${encodeURIComponent(product.id)}`;
-const workflowSections: StudioSection[] = ["overview", "curriculum", "offerings", "sessions", "publish"];
+const workflowSections: StudioSection[] = ["overview", "curriculum", "offerings", "publish"];
 const workflowSection = ["assessments", "resources"].includes(activeSection) ? "curriculum"
-  : ["results", "learners", "team"].includes(activeSection) ? "publish"
+  : activeSection === "sessions" ? "offerings"
+    : ["results", "learners", "team"].includes(activeSection) ? "publish"
     : activeSection;
 const workflowIndex = Math.max(0, workflowSections.indexOf(workflowSection as StudioSection));
 const previousWorkflowSection = workflowSections[Math.max(0, workflowIndex - 1)];
 const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 1, workflowIndex + 1)];
+const backWorkflowSection = activeSection === "sessions" ? "offerings" : previousWorkflowSection;
+const continueWorkflowSection = activeSection === "offerings" && studio?.course.delivery_mode !== "self-paced"
+  ? "sessions"
+  : nextWorkflowSection;
 ---
 <BaseLayout title="Creator studio — PencilScope">
   <section class="dashboard-hero studio-hero"><div class="shell">
@@ -241,7 +272,7 @@ const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 
 
     <main class="studio-main">
       {studioError && <p class="form-error">{studioError}</p>}
-      {createMode && <article class="panel studio-create-course"><div class="studio-section-intro"><div class="product-heading-with-icon"><ProductIcon name={requestedCourseProduct === "online_course" || requestedCourseProduct === "in_person_course" || requestedCourseProduct === "video_course" ? requestedCourseProduct : "course"} size="large" /><div><span class="eyebrow">New learning product</span><h2>Create {requestedCourseLabel.toLowerCase()}</h2><p>Start with the learning promise. Add content, delivery and pricing after the private draft is saved.</p></div></div><a class="text-link" href="/dashboard?workspace=creation">Cancel</a></div><form class="stack-form api-form" data-kind="course" action="/api/tutor/courses" method="post"><div class="form-columns"><label>Title<input name="title" required minlength="3" /></label><label>Topic<input name="subject" required placeholder="Mathematics, leadership, cooking…" /></label><label>Audience<input name="primaryLevel" required placeholder="Beginners, professionals, Primary 5…" /></label><label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing">Knowledge sharing</option><option value="seminar">Seminar</option><option value="workshop">Workshop</option><option value="coaching">Coaching</option><option value="certification-preparation">Certification preparation</option></select></label><label>Primary delivery<select name="deliveryMode"><option value="self-paced" selected={requestedCourseDelivery === "self-paced"}>Recorded / self-paced</option><option value="live" selected={requestedCourseDelivery === "live"}>Live online</option><option value="hybrid" selected={requestedCourseDelivery === "hybrid"}>In person / hybrid</option><option value="ai-supported">AI-supported</option></select></label></div><label>Description<textarea name="description" required minlength="20" rows="5"></textarea></label><p class="meet-assurance"><strong>Draft first:</strong> This product remains private. Build the content, then configure a learner price and publish from the offer step. Online sessions receive Google Meet links when scheduled.</p><button class="button" type="submit" data-next-section="curriculum">Save draft and continue</button><p class="form-message" aria-live="polite"></p></form></article>}
+      {createMode && <article class="panel studio-create-course"><div class="studio-section-intro"><div class="product-heading-with-icon"><ProductIcon name={requestedCourseProduct === "online_course" || requestedCourseProduct === "in_person_course" || requestedCourseProduct === "video_course" ? requestedCourseProduct : "course"} size="large" /><div><span class="eyebrow">Step 1 of 4 · Course details</span><h2>Create {requestedCourseLabel.toLowerCase()}</h2><p>Every required field starts with an editable value. Review the learning promise, then continue to content.</p></div></div><a class="text-link" href="/dashboard?workspace=creation">Cancel</a></div><form class="stack-form api-form" data-kind="course" action="/api/tutor/courses" method="post"><div class="form-columns"><label>Title<input name="title" required minlength="3" value={requestedCourseProduct === "online_course" ? "New online course" : `New ${requestedCourseLabel.toLowerCase()}`} /><small>Replace this working title before publishing.</small></label><label>Topic<input name="subject" required value="General learning" /></label><label>Audience<input name="primaryLevel" required value="General learners" /></label><label>Language<select name="languageCode" required>{learningLanguages.map((language) => <option value={language.code} selected={language.code === "en"}>{language.label}</option>)}</select></label><label>Category<select name="categorySlug"><option value="academic">Academic</option><option value="enrichment">Enrichment</option><option value="personal-development">Personal development</option><option value="professional-development">Professional development</option><option value="masterclass">Masterclass</option><option value="knowledge-sharing" selected>Knowledge sharing</option><option value="seminar">Seminar</option><option value="workshop">Workshop</option><option value="coaching">Coaching</option><option value="certification-preparation">Certification preparation</option></select></label><label>Primary delivery<select name="deliveryMode"><option value="self-paced" selected={requestedCourseDelivery === "self-paced"}>Recorded / self-paced</option><option value="live" selected={requestedCourseDelivery === "live" || requestedCourseProduct === "online_course"}>Live online</option><option value="hybrid" selected={requestedCourseDelivery === "hybrid"}>In person / hybrid</option><option value="ai-supported">AI-supported</option></select></label></div><label>Description<textarea name="description" required minlength="20" rows="4">{requestedCourseDescription}</textarea></label><p class="meet-assurance"><strong>Private draft:</strong> Content, schedule and pricing remain editable. Nothing is visible to learners until the final review is confirmed.</p><button class="button" type="submit" data-next-section="curriculum">Save draft and continue</button><p class="form-message" aria-live="polite"></p></form></article>}
       {!selectedId && !createMode && <article class="panel empty-state"><h2>Select a course</h2><p>Choose an existing course or create a new draft to start authoring.</p><a class="button button-small" href="/tutor?mode=new">Create a course</a></article>}
       {studio && (
         <>
@@ -255,12 +286,11 @@ const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 
                 <a class="button button-small" href={studioUrl("publish")}>Review & publish</a>
               </div>
             </div>
-            <nav class="course-editor-progress" aria-label="Course creation progress">
+            <nav class="course-editor-progress four-steps" aria-label="Course creation progress">
               <a class:list={{ active: activeSection === "overview", complete: true }} href={studioUrl("overview")}><span>1</span><strong>Details</strong></a>
               <a class:list={{ active: ["curriculum", "assessments", "resources"].includes(activeSection), complete: studio.modules.length > 0 && studio.lessons.length > 0 }} href={studioUrl("curriculum")}><span>{studio.modules.length > 0 && studio.lessons.length > 0 ? "✓" : "2"}</span><strong>Content</strong></a>
-              <a class:list={{ active: activeSection === "offerings", complete: studio.offerings.length > 0 }} href={studioUrl("offerings")}><span>{studio.offerings.length > 0 ? "✓" : "3"}</span><strong>Price</strong></a>
-              <a class:list={{ active: activeSection === "sessions", complete: studio.sessions.length > 0 || studio.course.delivery_mode === "self-paced" }} href={studioUrl("sessions")}><span>{studio.sessions.length > 0 || studio.course.delivery_mode === "self-paced" ? "✓" : "4"}</span><strong>Schedule</strong></a>
-              <a class:list={{ active: activeSection === "publish", complete: studio.course.status === "published" }} href={studioUrl("publish")}><span>{studio.course.status === "published" ? "✓" : "5"}</span><strong>Publish</strong></a>
+              <a class:list={{ active: ["offerings", "sessions"].includes(activeSection), complete: studio.offerings.length > 0 && (studio.sessions.length > 0 || studio.course.delivery_mode === "self-paced") }} href={studioUrl(studio.offerings.length ? "sessions" : "offerings")}><span>{studio.offerings.length > 0 && (studio.sessions.length > 0 || studio.course.delivery_mode === "self-paced") ? "✓" : "3"}</span><strong>Schedule & price</strong></a>
+              <a class:list={{ active: activeSection === "publish", complete: studio.course.status === "published" }} href={studioUrl("publish")}><span>{studio.course.status === "published" ? "✓" : "4"}</span><strong>Publish</strong></a>
             </nav>
           </article>
 
@@ -308,20 +338,20 @@ const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 
           </article>}
 
           {activeSection === "offerings" && <article class="panel">
-            <span class="eyebrow">Pricing, products and access</span><h2>Priced learning offers</h2>
-            <p class="studio-description">Choose the learner price, access period and included content. Nothing becomes visible or purchasable until enrolment is opened.</p>
-            <form class="inline-form api-form" data-kind="offering" action={`/api/tutor/courses/${studio.course.id}/offerings`} method="post">
-              <input name="title" required placeholder="Offering title" />
-              <select name="offeringType"><option value="self_paced">Self-paced access</option><option value="cohort">Scheduled cohort</option><option value="event">Single event / seminar</option><option value="academic_term">Academic term</option></select>
-              <select name="deliveryMode"><option value="recorded">Recorded</option><option value="live_online">Live online</option><option value="in_person">In person</option><option value="hybrid">Hybrid</option></select>
+            <span class="eyebrow">Step 3 of 4 · Schedule and price</span><h2>Plan the learner offer</h2>
+            <p class="studio-description">Sensible defaults are ready for an online cohort. Review the schedule, meeting allowance and suggested tuition before saving.</p>
+            <form class="inline-form api-form offering-default-form" data-kind="offering" action={`/api/tutor/courses/${studio.course.id}/offerings`} method="post">
+              <label>Offer title<input name="title" required value={`${studio.course.title} – Online cohort`} /></label>
+              <label>Access model<select name="offeringType"><option value="self_paced">Self-paced access</option><option value="cohort" selected={studio.course.delivery_mode === "live"}>Scheduled cohort</option><option value="event">Single event / seminar</option><option value="academic_term">Academic term</option></select></label>
+              <label>Delivery<select name="deliveryMode"><option value="recorded">Recorded</option><option value="live_online" selected={studio.course.delivery_mode === "live"}>Live online</option><option value="in_person">In person</option><option value="hybrid" selected={studio.course.delivery_mode === "hybrid"}>Hybrid</option></select></label>
               <input name="academicYear" type="number" min="2000" max="2200" value={new Date().getFullYear()} placeholder="Year (terms only)" />
               <input name="termNumber" type="number" min="1" max="12" value="1" placeholder="Term (terms only)" />
-              <input name="priceSGD" type="number" min="0.50" step="0.01" placeholder="Creator tuition SGD" required />
-              <input name="capacity" type="number" min="1" placeholder="Capacity (optional)" />
-              <input name="plannedMeetingMinutes" type="number" min="0" value="0" placeholder="Total live minutes" />
-              <input name="plannedMeetingParticipants" type="number" min="0" value="0" placeholder="Participants incl. hosts" />
-              <input name="plannedPaidLearners" type="number" min="1" value="1" placeholder="Planned paid learners" />
-              <fieldset class="offering-date-group"><legend>Delivery schedule</legend><label>Course starts<input name="startsAt" type="datetime-local" /></label><label>Course ends<input name="endsAt" type="datetime-local" /></label></fieldset><fieldset class="offering-date-group"><legend>Publishing and learner access</legend><label>Bookings open<input name="enrolmentOpensAt" type="datetime-local" /></label><label>Bookings close<input name="enrolmentClosesAt" type="datetime-local" /></label><label>Learning access ends<input name="accessEndsAt" type="datetime-local" /></label><small>Opening the offer publishes it. These dates control when learners can book and how long access remains available.</small></fieldset>
+              <label>Suggested tuition (SGD)<input name="priceSGD" type="number" min="0.50" step="0.01" value="50" required /><small>Editable suggestion. Confirm the commercial decision before publishing.</small></label>
+              <label>Capacity<input name="capacity" type="number" min="1" value="20" /></label>
+              <label>Total live minutes<input name="plannedMeetingMinutes" type="number" min="0" value={studio.course.delivery_mode === "live" ? "240" : "0"} /></label>
+              <label>Participants including host<input name="plannedMeetingParticipants" type="number" min="0" value={studio.course.delivery_mode === "live" ? "21" : "0"} /></label>
+              <label>Planned paid learners<input name="plannedPaidLearners" type="number" min="1" value="20" /></label>
+              <fieldset class="offering-date-group"><legend>Delivery schedule</legend><label>Course starts<input name="startsAt" type="datetime-local" value={formatSingaporeInput(defaultCourseStart)} /></label><label>Course ends<input name="endsAt" type="datetime-local" value={formatSingaporeInput(defaultCourseEnd)} /></label></fieldset><fieldset class="offering-date-group"><legend>Bookings and learner access</legend><label>Bookings open<input name="enrolmentOpensAt" type="datetime-local" value={formatSingaporeInput(defaultBookingOpen)} /></label><label>Bookings close<input name="enrolmentClosesAt" type="datetime-local" value={formatSingaporeInput(defaultBookingClose)} /></label><label>Learning access ends<input name="accessEndsAt" type="datetime-local" value={formatSingaporeInput(defaultAccessEnd)} /></label><small>The first course date is one week from today. Every date remains editable.</small></fieldset>
               <button class="button button-small" type="submit">Create draft offer</button><p class="form-message"></p>
             </form>
             <div class="term-grid studio-terms">{studio.offerings.map((offering) => (
@@ -382,20 +412,25 @@ const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 
             <div class="team-list">{team.map((member) => <section><span class="tutor-avatar">{member.display_name.slice(0, 1)}</span><div><strong>{member.display_name}</strong><small>{member.email} · {member.member_role} · {member.status}</small></div>{member.member_role !== "owner" && member.status === "active" && ["owner", "administrator", "platform_admin"].includes(courseRole || studio.course.member_role) && <form class="api-form" data-method="DELETE" action={`/api/tutor/courses/${studio.course.id}/team/${member.user_id}`} method="post"><button class="text-link danger-link" type="submit">Remove access</button><p class="form-message"></p></form>}</section>)}</div>
           </article>}
 
-          {activeSection === "sessions" && !selectedOffering && <article class="panel empty-state"><span class="eyebrow">Sessions</span><h2>Set up enrolment first</h2><p>Choose a price and enrolment option before scheduling live or in-person sessions.</p><a class="button" href={studioUrl("offerings")}>Set up enrolment</a></article>}
+          {activeSection === "sessions" && !selectedOffering && <article class="panel empty-state"><span class="eyebrow">Step 3 of 4 · Schedule and price</span><h2>Create the draft learner offer</h2><p>The offer holds the schedule, meeting allowance and editable tuition. It remains private until the final review.</p><a class="button" href={studioUrl("offerings")}>Prepare schedule & price</a></article>}
           {activeSection === "sessions" && selectedOffering && <article class="panel">
-            <span class="eyebrow">Scheduled delivery</span><h2>Live and in-person sessions</h2>
+            <span class="eyebrow">Step 3 of 4 · Scheduled delivery</span><h2>Add live classes</h2>
+            {Astro.url.searchParams.get("google") === "connected" && <p class="form-success">Google Calendar and Meet connected. You can now create online sessions.</p>}
+            {Astro.url.searchParams.get("error") && <p class="form-error">{Astro.url.searchParams.get("error")}</p>}
+            <section class:list={["google-session-connector", { connected: Boolean(googleIntegration) }]}>
+              <div><strong>{googleIntegration ? "Google Calendar & Meet connected" : "Connect Google Calendar & Meet"}</strong><p>{googleIntegration ? `Connected as ${googleIntegration.google_email}. Online sessions create Meet links and invite enrolled learners.` : "Connect once to create Meet links and learner invitations automatically."}</p></div>
+              <a class:list={["button", "button-small", { "button-secondary": Boolean(googleIntegration) }]} href={`/api/integrations/google/start?next=${encodeURIComponent(studioUrl("sessions"))}`}>{googleIntegration ? "Reconnect" : "Connect Google"}</a>
+            </section>
             <form class="inline-form api-form" data-kind="session" action={`/api/tutor/offerings/${selectedOffering.id}/sessions`} method="post">
-              <input name="title" required placeholder="Session title" />
-              <select name="deliveryMode"><option value="live_online">Live online</option><option value="in_person">In person</option></select>
-              <label>Starts<input name="startsAt" type="datetime-local" required /></label><label>Ends<input name="endsAt" type="datetime-local" required /></label>
-              <input name="capacity" type="number" min="1" placeholder="Capacity" />
-              <p class="form-message">Online sessions create a restricted Google Meet from the course owner's connected Google Calendar.</p>
-              <select name="instructorId" aria-label="Assigned instructor"><option value={dashboard.user.id}>Me</option>{team.filter((member) => member.user_id !== dashboard.user.id && member.status === "active" && ["owner", "administrator", "instructor", "facilitator"].includes(member.member_role)).map((member) => <option value={member.user_id}>{member.display_name} · {member.member_role}</option>)}</select>
+              <label>Session title<input name="title" required value={`Session ${selectedSessions.length + 1}`} /></label>
+              <label>Delivery<select name="deliveryMode"><option value="live_online" selected={selectedOffering.delivery_mode !== "in_person"}>Live online</option><option value="in_person" selected={selectedOffering.delivery_mode === "in_person"}>In person</option></select></label>
+              <label>Starts<input name="startsAt" type="datetime-local" value={formatSingaporeInput(defaultSessionStart)} required /></label><label>Ends<input name="endsAt" type="datetime-local" value={formatSingaporeInput(defaultSessionEnd)} required /></label>
+              <label>Capacity<input name="capacity" type="number" min="1" value={selectedOffering.capacity ?? 20} /></label>
+              <label>Host<select name="instructorId"><option value={dashboard.user.id}>Me</option>{team.filter((member) => member.user_id !== dashboard.user.id && member.status === "active" && ["owner", "administrator", "instructor", "facilitator"].includes(member.member_role)).map((member) => <option value={member.user_id}>{member.display_name} · {member.member_role}</option>)}</select></label>
               <input name="venueName" placeholder="Venue name (in person)" />
               <input name="venueAddress" placeholder="Venue address (in person)" />
               <input name="arrivalInstructions" placeholder="Arrival instructions" />
-              <button class="button button-small" type="submit">Add session</button><p class="form-message"></p>
+              <button class="button button-small" type="submit" disabled={!googleIntegration && selectedOffering.delivery_mode !== "in_person"}>Add session</button><p class="form-message">{!googleIntegration && selectedOffering.delivery_mode !== "in_person" ? "Connect Google above before creating this online session." : "The session will be added without leaving this part of the course."}</p>
             </form>
             <div class="studio-items">{studio.sessions.filter((session) => session.course_offering_id === selectedOffering.id).map((session) => <section><h3>{session.title}</h3><small>{session.delivery_mode.replace("_", " ")} · {new Date(session.starts_at).toLocaleString("en-SG")}{session.instructor_name ? ` · ${session.instructor_name}` : ""}{session.venue_name ? ` · ${session.venue_name}` : ""}</small>{session.delivery_mode === "live_online" && <span class="studio-status complete">Google Meet created</span>}</section>)}</div>
           </article>}
@@ -639,16 +674,26 @@ const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 
             {studio.course.status === "published" && <section class="listing-controls"><span class="eyebrow">Publication visibility</span><h3>{studio.course.listing_status === "listed" ? "This course is published and discoverable." : "This course is unpublished."}</h3><p>{studio.course.listing_status === "listed" ? "Unpublishing stops new bookings while preserving existing learner access, results and records." : studio.course.delisted_reason ?? "Existing learners continue to have access."}</p>{studio.course.listing_status === "listed" ? <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/delist`} method="post"><input name="reason" required minlength="3" placeholder="Reason for unpublishing" /><button class="button button-small button-danger" type="submit">Unpublish course</button><p class="form-message"></p></form> : <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/relist`} method="post"><button class="button button-small" type="submit">Republish course</button><p class="form-message"></p></form>}</section>}
           </article>}
           <nav class="studio-bottom-actions" aria-label="Course creation actions">
-            <a class="button button-secondary" href={studioUrl(previousWorkflowSection)} aria-disabled={workflowIndex === 0}>Back</a>
-            <span><small>Step {workflowIndex + 1} of {workflowSections.length}</small><strong>{["Details", "Content", "Price", "Schedule", "Publish"][workflowIndex]}</strong></span>
+            <a class="button button-secondary" href={studioUrl(backWorkflowSection)} aria-disabled={workflowIndex === 0}>Back</a>
+            <span><small>Step {workflowIndex + 1} of {workflowSections.length}</small><strong>{["Details", "Content", "Schedule & price", "Publish"][workflowIndex]}</strong></span>
             {workflowIndex < workflowSections.length - 1
-              ? <a class="button" href={studioUrl(nextWorkflowSection)}>Continue</a>
+              ? <a class="button" href={studioUrl(continueWorkflowSection)}>Continue</a>
               : <a class="button" href={studioUrl("publish")}>Review & publish</a>}
           </nav>
         </>
       )}
     </main>
   </section>
+  <style>
+    .course-editor-progress.four-steps{grid-template-columns:repeat(4,minmax(0,1fr))}
+    .studio-main>.panel>.inline-form.offering-default-form{grid-template-columns:repeat(2,minmax(220px,1fr))}
+    .offering-default-form>.offering-date-group{grid-column:1/-1}
+    .google-session-connector{margin:18px 0;padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:18px;border:1px solid #b9d1ee;border-radius:12px;background:#eff6ff}
+    .google-session-connector.connected{border-color:#a8d4bb;background:#f0fbf4}
+    .google-session-connector strong,.google-session-connector p{display:block}.google-session-connector p{margin:4px 0 0;color:var(--muted);font-size:10px;line-height:1.5}
+    @media(max-width:900px){.course-editor-progress.four-steps{grid-template-columns:repeat(4,minmax(105px,1fr))}}
+    @media(max-width:760px){.studio-main>.panel>.inline-form.offering-default-form{grid-template-columns:1fr}.offering-default-form>.offering-date-group{grid-column:auto}.google-session-connector{align-items:stretch;flex-direction:column}.google-session-connector .button{justify-content:center}}
+  </style>
   <script>
     document.querySelectorAll<HTMLFormElement>(".api-form").forEach((form) => {
       form.addEventListener("submit", async (event) => {
@@ -771,6 +816,9 @@ const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 
           return;
         }
         const section = nextSection ?? currentUrl.searchParams.get("section");
+        if (["module", "lesson", "session"].includes(form.dataset.kind ?? "") || form.action.includes("/modules")) {
+          sessionStorage.setItem("pencilscopeStudioScroll", String(window.scrollY));
+        }
         location.href = courseId
           ? `/tutor?courseId=${encodeURIComponent(courseId)}${section ? `&section=${encodeURIComponent(section)}` : ""}${offeringId ? `&offeringId=${encodeURIComponent(offeringId)}` : ""}`
           : "/tutor";
@@ -879,6 +927,21 @@ const nextWorkflowSection = workflowSections[Math.min(workflowSections.length - 
           if (button) button.disabled = false;
         }
       });
+    });
+    const savedStudioScroll = sessionStorage.getItem("pencilscopeStudioScroll");
+    if (savedStudioScroll) {
+      sessionStorage.removeItem("pencilscopeStudioScroll");
+      requestAnimationFrame(() => window.scrollTo({ top: Number(savedStudioScroll), behavior: "auto" }));
+    }
+    document.querySelectorAll<HTMLFormElement>('form[data-kind="session"]').forEach((form) => {
+      const delivery = form.elements.namedItem("deliveryMode") as HTMLSelectElement | null;
+      const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+      const googleConnected = Boolean(document.querySelector(".google-session-connector.connected"));
+      const syncAvailability = () => {
+        if (submit) submit.disabled = delivery?.value === "live_online" && !googleConnected;
+      };
+      delivery?.addEventListener("change", syncAvailability);
+      syncAvailability();
     });
   </script>
 </BaseLayout>

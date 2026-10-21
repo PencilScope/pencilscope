@@ -45,6 +45,10 @@ const data = await response.json<{
     content_version: number;
   }>;
 }>();
+const googleResponse = await requestApi("/api/integrations/google/status", { userId });
+const googleIntegration = googleResponse.ok
+  ? (await googleResponse.json<{ integration: { google_email: string; status: string } | null }>()).integration
+  : null;
 const requestedPeriod = ["30", "90", "365", "all"].includes(Astro.url.searchParams.get("period") ?? "")
   ? Astro.url.searchParams.get("period")! : "all";
 const overviewResponse = await requestApi(`/api/creator/overview?period=${requestedPeriod}`, { userId });
@@ -548,10 +552,85 @@ const pricingPublishUrl = pricingPublishTarget
 
       {workspace === "creation" && section === "activity" && creatorOverview && <article class="panel dashboard-section-panel"><div class="dashboard-section-heading"><div><span class="eyebrow">Detailed audit trail</span><h2>Creation activity</h2></div><a class="button button-small button-secondary" href="/action-history">Open full screen</a></div><div class="audit-list">{creatorOverview.auditLogs.map((entry) => <section><span class="audit-mark" aria-hidden="true">•</span><div><strong>{entry.action.replaceAll(".", " ").replaceAll("_", " ")}</strong><small>{entry.entity_type.replaceAll("_", " ")} · {entry.actor_name}</small></div><time datetime={entry.created_at}>{new Date(entry.created_at).toLocaleString("en-SG")}</time></section>)}</div>{!creatorOverview.auditLogs.length && <p class="form-message">Creator activity will be recorded here.</p>}</article>}
     </main>
+    <span id="google-integration-state" data-connected={googleIntegration?.status === "active" ? "true" : "false"} hidden></span>
   </section>
 </BaseLayout>
 
+<style>
+  .google-session-connector{margin:14px 0;padding:15px 17px;display:flex;align-items:center;justify-content:space-between;gap:18px;border:1px solid #b9d1ee;border-radius:12px;background:#eff6ff}
+  .google-session-connector.connected{border-color:#a8d4bb;background:#f0fbf4}
+  .google-session-connector strong,.google-session-connector p{display:block}.google-session-connector p{margin:4px 0 0;color:var(--muted);font-size:10px;line-height:1.5}
+  @media(max-width:760px){.google-session-connector{align-items:stretch;flex-direction:column}.google-session-connector .button{justify-content:center}}
+</style>
 <script>
+  const googleConnected = document.querySelector<HTMLElement>("#google-integration-state")?.dataset.connected === "true";
+  const localInputValue = (date: Date) => {
+    const offset = date.getTimezoneOffset();
+    return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 16);
+  };
+  const setIfEmpty = (form: HTMLFormElement, name: string, value: string) => {
+    const input = form.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+    if (input && !input.value) input.value = value;
+  };
+  document.querySelectorAll<HTMLFormElement>('.dashboard-api-form[data-kind="course"]').forEach((form) => {
+    const delivery = form.elements.namedItem("deliveryMode") as HTMLSelectElement | HTMLInputElement | null;
+    const courseKind = delivery?.value === "hybrid" ? "in_person" : delivery?.value === "self-paced" ? "video" : "online";
+    setIfEmpty(form, "title", courseKind === "in_person" ? "New in-person course" : courseKind === "video" ? "New video course" : "New online course");
+    setIfEmpty(form, "subject", "General learning");
+    setIfEmpty(form, "primaryLevel", "General learners");
+    setIfEmpty(form, "description", courseKind === "in_person"
+      ? "An instructor-led in-person learning experience designed for general learners."
+      : courseKind === "video"
+        ? "A self-paced video learning experience designed for general learners."
+        : "A live online learning experience designed for general learners.");
+    const category = form.elements.namedItem("categorySlug") as HTMLSelectElement | null;
+    if (category) category.value = "knowledge-sharing";
+    if (delivery && delivery instanceof HTMLSelectElement) delivery.value = "live";
+  });
+  document.querySelectorAll<HTMLFormElement>('.dashboard-api-form[data-kind="offering"]').forEach((form) => {
+    const courseTitle = document.querySelector<HTMLElement>(".inline-studio-heading h3")?.textContent?.trim() || "Online course";
+    setIfEmpty(form, "title", `${courseTitle} – Online cohort`);
+    setIfEmpty(form, "priceSGD", "50");
+    setIfEmpty(form, "capacity", "20");
+    const meetingMinutes = form.elements.namedItem("plannedMeetingMinutes") as HTMLInputElement | null;
+    const meetingParticipants = form.elements.namedItem("plannedMeetingParticipants") as HTMLInputElement | null;
+    const paidLearners = form.elements.namedItem("plannedPaidLearners") as HTMLInputElement | null;
+    if (meetingMinutes && Number(meetingMinutes.value) === 0) meetingMinutes.value = "240";
+    if (meetingParticipants && Number(meetingParticipants.value) === 0) meetingParticipants.value = "21";
+    if (paidLearners && Number(paidLearners.value) <= 1) paidLearners.value = "20";
+    const start = new Date(); start.setDate(start.getDate() + 7); start.setHours(19, 0, 0, 0);
+    const end = new Date(start); end.setDate(end.getDate() + 28);
+    const close = new Date(start.getTime() - 60 * 60_000);
+    const access = new Date(end); access.setDate(access.getDate() + 7);
+    setIfEmpty(form, "startsAt", localInputValue(start)); setIfEmpty(form, "endsAt", localInputValue(end));
+    setIfEmpty(form, "enrolmentOpensAt", localInputValue(new Date())); setIfEmpty(form, "enrolmentClosesAt", localInputValue(close));
+    setIfEmpty(form, "accessEndsAt", localInputValue(access));
+    const offeringType = form.elements.namedItem("offeringType") as HTMLSelectElement | null;
+    const delivery = form.elements.namedItem("deliveryMode") as HTMLSelectElement | null;
+    if (offeringType) offeringType.value = "cohort";
+    if (delivery) delivery.value = "live_online";
+  });
+  document.querySelectorAll<HTMLFormElement>('.dashboard-api-form[data-kind="session"]').forEach((form, index) => {
+    const start = new Date(); start.setDate(start.getDate() + 7 + index * 7); start.setHours(19, 0, 0, 0);
+    const end = new Date(start.getTime() + 60 * 60_000);
+    setIfEmpty(form, "title", `Session ${index + 1}`); setIfEmpty(form, "startsAt", localInputValue(start));
+    setIfEmpty(form, "endsAt", localInputValue(end)); setIfEmpty(form, "capacity", "20");
+    const connector = document.createElement("section");
+    connector.className = `google-session-connector${googleConnected ? " connected" : ""}`;
+    const text = document.createElement("div");
+    const title = document.createElement("strong"); title.textContent = googleConnected ? "Google Calendar & Meet connected" : "Connect Google Calendar & Meet";
+    const detail = document.createElement("p"); detail.textContent = googleConnected ? "Online sessions create Meet links and learner invitations automatically." : "Connect once before creating an online session.";
+    text.appendChild(title); text.appendChild(detail); connector.appendChild(text);
+    const link = document.createElement("a"); link.className = `button button-small${googleConnected ? " button-secondary" : ""}`;
+    link.href = `/api/integrations/google/start?next=${encodeURIComponent(location.pathname + location.search)}`; link.textContent = googleConnected ? "Reconnect" : "Connect Google";
+    connector.appendChild(link); form.parentElement?.insertBefore(connector, form);
+    const delivery = form.elements.namedItem("deliveryMode") as HTMLSelectElement | null;
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+    const sync = () => { if (submit) submit.disabled = delivery?.value === "live_online" && !googleConnected; };
+    delivery?.addEventListener("change", sync); sync();
+  });
+  const savedCourseStudioScroll = sessionStorage.getItem("pencilscopeDashboardStudioScroll");
+  if (savedCourseStudioScroll) { sessionStorage.removeItem("pencilscopeDashboardStudioScroll"); requestAnimationFrame(() => window.scrollTo({ top: Number(savedCourseStudioScroll), behavior: "auto" })); }
   document.querySelectorAll<HTMLFormElement>(".inline-complete-form").forEach((form) => {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -685,6 +764,7 @@ const pricingPublishUrl = pricingPublishTarget
         const current = new URL(window.location.href);
         const courseId = result.course?.id ?? result.offering?.courseId ?? current.searchParams.get("courseId");
         const offeringId = result.offering?.id ?? current.searchParams.get("offeringId");
+        if (form.dataset.kind === "session") sessionStorage.setItem("pencilscopeDashboardStudioScroll", String(window.scrollY));
         window.location.href = `/dashboard?workspace=creation&section=course-studio${courseId ? `&courseId=${encodeURIComponent(courseId)}` : ""}${offeringId ? `&offeringId=${encodeURIComponent(offeringId)}` : ""}${result.offering?.id ? "#price-enrolment" : ""}`;
       } catch (error) {
         if (message) { message.className = "form-message form-error"; message.textContent = error instanceof Error ? error.message : "Could not save."; }

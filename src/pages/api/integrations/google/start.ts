@@ -18,6 +18,11 @@ export const GET: APIRoute = async ({ request, locals, session, redirect }) => {
   session?.set("googleIntegrationState", state);
   session?.set("googleIntegrationVerifier", verifier);
   session?.set("googleIntegrationStartedAt", Date.now());
+  const requestedNext = new URL(request.url).searchParams.get("next");
+  const safeNext = requestedNext && requestedNext.startsWith("/") && !requestedNext.startsWith("//") && !requestedNext.includes("\\")
+    ? requestedNext
+    : "/profile";
+  session?.set("googleIntegrationNext", safeNext);
   const redirectUri = new URL("/api/integrations/google/callback", request.url).toString();
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
