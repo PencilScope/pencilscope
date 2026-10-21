@@ -236,6 +236,23 @@ export async function updateGoogleMeetForSession(env: ApiEnvironment, input: {
     throw new Error(payload.error?.message ?? "Google Calendar could not update this session.");
   }
 }
+
+export async function deleteGoogleMeetForSession(env: ApiEnvironment, input: {
+  ownerUserId: string;
+  eventId: string;
+}): Promise<void> {
+  const row = await integration(env, input.ownerUserId);
+  if (!row) throw new Error("The course owner must reconnect Google Calendar before removing this online session.");
+  const token = await accessToken(env, row);
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(input.eventId)}?sendUpdates=all`,
+    { method: "DELETE", headers: { authorization: `Bearer ${token}` } }
+  );
+  if (!response.ok && response.status !== 404 && response.status !== 410) {
+    const payload: { error?: { message?: string } } = await response.json<{ error?: { message?: string } }>().catch(() => ({}));
+    throw new Error(payload.error?.message ?? "Google Calendar could not remove this session.");
+  }
+}
 async function syncEventAttendees(env: ApiEnvironment, session: {
   google_calendar_event_id: string; tutor_id: string;
 }): Promise<void> {

@@ -2,7 +2,7 @@ import { getCreatorActorById } from "../../../src/lib/auth";
 import { json, problem } from "../../../src/lib/http";
 import type { ApiEnvironment } from "./index";
 import { calculateOfferingPrice } from "./platform-pricing";
-import { createGoogleMeetForSession, updateGoogleMeetForSession } from "./google-meet";
+import { createGoogleMeetForSession, deleteGoogleMeetForSession, updateGoogleMeetForSession } from "./google-meet";
 import { questionMediaInsert, resolveQuestionMedia, serveQuestionMediaVersion } from "./question-media";
 
 type UserRow = {
@@ -1533,8 +1533,9 @@ async function tutorAuthoring(
       ).bind(courseId).all(),
       env.DB.prepare(
         `SELECT s.id, s.course_offering_id, s.instructor_user_id, s.title, s.delivery_mode,
-          s.starts_at, s.ends_at, s.timezone, s.capacity, s.meeting_url,
-          iu.display_name AS instructor_name, v.name AS venue_name, v.address_line_1
+          s.starts_at, s.ends_at, s.timezone, s.capacity, s.meeting_url, s.status,
+          o.status AS offering_status, iu.display_name AS instructor_name,
+          v.name AS venue_name, v.address_line_1, v.city, v.arrival_instructions
          FROM course_sessions s LEFT JOIN venues v ON v.id = s.venue_id
          LEFT JOIN users iu ON iu.id = s.instructor_user_id
          JOIN course_offerings o ON o.id = s.course_offering_id
@@ -1953,8 +1954,8 @@ async function tutorAuthoring(
        WHERE s.id = ? AND (c.tutor_id = ? OR ? = 'admin')`
     ).bind(sessionId, actor.id, actor.role).first<Record<string, unknown>>();
     if (!current) return problem(403, "session_forbidden", "You cannot edit this course session.");
-    if (current.offering_status !== "draft" || current.status !== "scheduled") {
-      return problem(409, "draft_offering_required", "Only scheduled sessions in a draft offer can be changed.");
+    if (current.status !== "scheduled" || Date.parse(String(current.ends_at)) <= Date.now()) {
+      return problem(409, "scheduled_session_required", "Only upcoming scheduled sessions can be changed.");
     }
     const input = await parseJson(request);
     const deliveryMode = String(current.delivery_mode);
@@ -2014,6 +2015,49 @@ async function tutorAuthoring(
     await env.DB.batch(statements);
     return json({ session: { id: sessionId, offeringId: current.course_offering_id, title, deliveryMode,
       startsAt, endsAt, timezone, capacity, ...(deliveryMode === "in_person" ? { venueName, venueAddress, city, arrivalInstructions } : {}) } });
+  }
+  if (request.method === "DELETE" && sessionUpdateMatch) {
+    const sessionId = decodeURIComponent(sessionUpdateMatch[1]);
+    const current = await env.DB.prepare(
+      `SELECT s.*, o.status AS offering_status, c.id AS course_id, c.tutor_id
+       FROM course_sessions s JOIN course_offerings o ON o.id = s.course_offering_id
+       JOIN courses c ON c.id = o.course_id
+       WHERE s.id = ? AND (c.tutor_id = ? OR ? = 'admin')`
+    ).bind(sessionId, actor.id, actor.role).first<Record<string, unknown>>();
+    if (!current) return problem(403, "session_forbidden", "You cannot remove this course session.");
+    if (current.status !== "scheduled" || Date.parse(String(current.ends_at)) <= Date.now()) {
+      return problem(409, "scheduled_session_required", "Only upcoming scheduled sessions can be removed.");
+    }
+    if (current.google_calendar_event_id) {
+      try {
+        await deleteGoogleMeetForSession(env, {
+          ownerUserId: String(current.tutor_id), eventId: String(current.google_calendar_event_id)
+        });
+      } catch (error) {
+        return problem(502, "google_meet_delete_failed", error instanceof Error ? error.message : "Google Meet could not be removed.");
+      }
+    }
+    const now = new Date().toISOString();
+    const statements = [env.DB.prepare(
+      `INSERT INTO audit_logs
+        (id, actor_user_id, action, entity_type, entity_id, metadata_json, created_at)
+       VALUES (?, ?, ?, 'course_session', ?, ?, ?)`
+    ).bind(
+      crypto.randomUUID(), actor.id,
+      current.offering_status === "draft" ? "course.session_deleted" : "course.session_cancelled",
+      sessionId, JSON.stringify({ courseId: current.course_id, offeringId: current.course_offering_id }), now
+    )];
+    if (current.offering_status === "draft") {
+      statements.unshift(env.DB.prepare("UPDATE lessons SET course_session_id = NULL WHERE course_session_id = ?").bind(sessionId));
+      statements.push(env.DB.prepare("DELETE FROM course_sessions WHERE id = ?").bind(sessionId));
+      if (current.venue_id) statements.push(env.DB.prepare("DELETE FROM venues WHERE id = ?").bind(current.venue_id));
+    } else {
+      statements.unshift(env.DB.prepare(
+        "UPDATE course_sessions SET status = 'cancelled', meeting_url = NULL, updated_at = ? WHERE id = ?"
+      ).bind(now, sessionId));
+    }
+    await env.DB.batch(statements);
+    return json({ deleted: current.offering_status === "draft", cancelled: current.offering_status !== "draft", sessionId });
   }
   const courseOfferingMatch = pathname.match(/^\/api\/tutor\/courses\/([^/]+)\/offerings$/);
   if (request.method === "POST" && courseOfferingMatch) {
@@ -2227,6 +2271,58 @@ async function tutorAuthoring(
     }
     await env.DB.batch(statements);
     return json({ module: { id, courseId, title, position } }, { status: 201 });
+  }
+
+  const moduleUpdateMatch = pathname.match(/^\/api\/tutor\/modules\/([^/]+)$/);
+  if ((request.method === "PATCH" || request.method === "DELETE") && moduleUpdateMatch) {
+    const moduleId = decodeURIComponent(moduleUpdateMatch[1]);
+    const current = await env.DB.prepare(
+      `SELECT m.id, m.course_id, m.title, m.position,
+        EXISTS(SELECT 1 FROM course_offering_modules om
+          JOIN course_offerings o ON o.id = om.course_offering_id
+          WHERE om.module_id = m.id AND o.status = 'published') AS published
+       FROM course_modules m JOIN courses c ON c.id = m.course_id
+       WHERE m.id = ? AND (c.tutor_id = ? OR ? = 'admin' OR EXISTS (
+         SELECT 1 FROM course_members cm WHERE cm.course_id = c.id AND cm.user_id = ?
+           AND cm.status = 'active' AND cm.member_role IN ('owner', 'administrator', 'editor')
+       ))`
+    ).bind(moduleId, actor.id, actor.role, actor.id).first<{
+      id: string; course_id: string; title: string; position: number; published: number;
+    }>();
+    if (!current) return problem(403, "module_forbidden", "You cannot edit this module.");
+    if (current.published) {
+      return problem(409, "published_module_locked", "This module is included in a published offer. Create a new course version before changing it.");
+    }
+    const now = new Date().toISOString();
+    if (request.method === "PATCH") {
+      const input = await parseJson(request);
+      const title = input?.title === undefined ? current.title : text(input.title, 2, 120);
+      const position = input?.position === undefined ? current.position : Number(input.position);
+      if (!title || !Number.isInteger(position) || position < 1) {
+        return problem(400, "invalid_module", "Provide a module title and a valid position.");
+      }
+      await env.DB.batch([
+        env.DB.prepare("UPDATE course_modules SET title = ?, position = ? WHERE id = ?").bind(title, position, moduleId),
+        env.DB.prepare("UPDATE course_offering_modules SET position = ? WHERE module_id = ?").bind(position, moduleId),
+        env.DB.prepare("UPDATE courses SET updated_at = ? WHERE id = ?").bind(now, current.course_id),
+        env.DB.prepare(
+          `INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata_json, created_at)
+           VALUES (?, ?, 'course.module_updated', 'course_module', ?, ?, ?)`
+        ).bind(crypto.randomUUID(), actor.id, moduleId, JSON.stringify({ courseId: current.course_id }), now)
+      ]);
+      return json({ module: { id: moduleId, courseId: current.course_id, title, position } });
+    }
+    const lessonCount = await env.DB.prepare("SELECT COUNT(*) AS count FROM lessons WHERE module_id = ?")
+      .bind(moduleId).first<{ count: number }>();
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM course_modules WHERE id = ?").bind(moduleId),
+      env.DB.prepare("UPDATE courses SET updated_at = ? WHERE id = ?").bind(now, current.course_id),
+      env.DB.prepare(
+        `INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata_json, created_at)
+         VALUES (?, ?, 'course.module_deleted', 'course_module', ?, ?, ?)`
+      ).bind(crypto.randomUUID(), actor.id, moduleId, JSON.stringify({ courseId: current.course_id, lessonCount: Number(lessonCount?.count ?? 0) }), now)
+    ]);
+    return json({ deleted: true, moduleId, lessonCount: Number(lessonCount?.count ?? 0) });
   }
 
   const lessonMatch = pathname.match(/^\/api\/tutor\/modules\/([^/]+)\/lessons$/);

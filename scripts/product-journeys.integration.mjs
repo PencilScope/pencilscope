@@ -53,9 +53,12 @@ const runLocalMigrations = async () => {
   throw lastError;
 };
 const json = async (response, expectedStatus) => {
-  const payload = await response.json().catch(() => ({}));
-  if (expectedStatus !== undefined) assert.equal(response.status, expectedStatus, JSON.stringify(payload));
-  else assert.equal(response.ok, true, JSON.stringify(payload));
+  const raw = await response.text();
+  let payload = {};
+  try { payload = raw ? JSON.parse(raw) : {}; } catch { payload = {}; }
+  const diagnostic = raw || JSON.stringify(payload);
+  if (expectedStatus !== undefined) assert.equal(response.status, expectedStatus, diagnostic);
+  else assert.equal(response.ok, true, diagnostic);
   return payload;
 };
 const api = (path, { method = "GET", headers = creatorHeaders, body } = {}) => fetch(origin + path, {
@@ -185,6 +188,23 @@ try {
     assert.equal(edited.course.title, `${title} edited`);
   }
 
+  const editableModule = await json(await api(`/api/tutor/courses/${encodeURIComponent(inPersonCourseId)}/modules`, {
+    method: "POST", body: { title: "Editable journey module", position: 1 }
+  }), 201);
+  const updatedModule = await json(await api(`/api/tutor/modules/${encodeURIComponent(editableModule.module.id)}`, {
+    method: "PATCH", body: { title: "Updated journey module", position: 2 }
+  }));
+  assert.equal(updatedModule.module.title, "Updated journey module");
+  assert.equal(updatedModule.module.position, 2);
+  await json(await api(`/api/tutor/modules/${encodeURIComponent(editableModule.module.id)}/lessons`, {
+    method: "POST", body: { title: "Disposable lesson", lessonType: "text", deliveryMode: "recorded", position: 1 }
+  }), 201);
+  const deletedModule = await json(await api(`/api/tutor/modules/${encodeURIComponent(editableModule.module.id)}`, {
+    method: "DELETE"
+  }));
+  assert.equal(deletedModule.deleted, true);
+  assert.equal(deletedModule.lessonCount, 1);
+
   const scheduledOffering = await json(await api(`/api/tutor/courses/${encodeURIComponent(inPersonCourseId)}/offerings`, {
     method: "POST",
     body: {
@@ -219,6 +239,11 @@ try {
   }));
   assert.equal(updatedSession.session.venueName, "Learning Hall Annex");
   assert.equal(updatedSession.session.startsAt, "2027-02-06T01:30:00.000Z");
+  const deletedSession = await json(await api(`/api/tutor/sessions/${encodeURIComponent(scheduledSession.session.id)}`, {
+    method: "DELETE"
+  }));
+  assert.equal(deletedSession.deleted, true);
+  assert.equal(deletedSession.cancelled, false);
   const imageItem = (await upload("journey-cover.png", "journey image", "image/png", "Journey cover")).item;
   const documentItem = (await upload("journey-guide.pdf", "%PDF journey guide", "application/pdf", "Journey guide")).item;
   const audioItem = (await upload("journey-audio.mp3", "journey audio", "audio/mpeg", "Journey audio")).item;

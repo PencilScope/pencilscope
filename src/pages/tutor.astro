@@ -99,6 +99,7 @@ let studio: {
     id: string; course_offering_id: string; title: string; delivery_mode: string;
     starts_at: string; ends_at: string; timezone: string; capacity: number | null;
     meeting_url: string | null; venue_name: string | null; address_line_1: string | null;
+    city: string | null; arrival_instructions: string | null; status: string; offering_status: string;
     instructor_user_id: string | null; instructor_name: string | null;
   }>;
   learners: Array<{
@@ -240,16 +241,16 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
         <a class="studio-products-back" href="/tutor"><span aria-hidden="true">←</span><span><strong>My Products</strong><small>{creatorProductCount} created</small></span></a>
         <div class="studio-sidebar-heading studio-selected-product"><span class="eyebrow">Course workspace</span><h2>{studio.course.title}</h2><p>{studio.course.delivery_mode.replaceAll("-", " ")} · {studio.course.status === "published" && studio.course.listing_status !== "listed" ? "unpublished" : studio.course.status}</p></div>
         <nav class="studio-module-nav" aria-label="Course studio sections">
-          <a class:list={{ active: activeSection === "overview" }} href={studioUrl("overview")}><span>Overview</span><small>{readinessComplete}/{readiness.length} ready</small></a>
-          <a class:list={{ active: activeSection === "curriculum" }} href={studioUrl("curriculum")}><span>Build content</span><small>{studio.modules.length} modules · {studio.lessons.length} lessons</small></a>
-          <a class:list={{ active: activeSection === "assessments" }} href={studioUrl("assessments")}><span>Assessments</span><small>{studio.assessments.length}{draftAssessmentCount ? ` · ${draftAssessmentCount} draft` : ""}</small></a>
-          <a class:list={{ active: activeSection === "resources" }} href={studioUrl("resources")}><span>Resources</span><small>{studio.materials.length + studio.flashcardDecks.length}</small></a>
-          <a class:list={{ active: activeSection === "offerings" }} href={studioUrl("offerings")}><span>Price & enrolment</span><small>{studio.offerings.length}</small></a>
-          <a class:list={{ active: activeSection === "sessions" }} href={studioUrl("sessions")}><span>Schedule</span><small>{studio.sessions.length}</small></a>
-          <a class:list={{ active: activeSection === "learners" }} href={studioUrl("learners")}><span>Learners</span><small>{invitations.length}</small></a>
-          <a class:list={{ active: activeSection === "results" }} href={studioUrl("results")}><span>Insights</span><small>{resultAttempts.length} attempts</small></a>
-          <a class:list={{ active: activeSection === "team" }} href={studioUrl("team")}><span>Team</span><small>{team.filter((member) => member.status === "active").length}</small></a>
-          <a class:list={{ active: activeSection === "publish" }} href={studioUrl("publish")}><span>Review & publish</span><small>{studio.course.status}</small></a>
+          <a class:list={{ active: activeSection === "overview" }} href={studioUrl("overview")}><span><i aria-hidden="true">⌂</i> Overview</span><small>{readinessComplete}/{readiness.length} ready</small></a>
+          <a class:list={{ active: activeSection === "curriculum" }} href={studioUrl("curriculum")}><span><i aria-hidden="true">▤</i> Build content</span><small>{studio.modules.length} modules · {studio.lessons.length} lessons</small></a>
+          <a class:list={{ active: activeSection === "assessments" }} href={studioUrl("assessments")}><span><i aria-hidden="true">✓</i> Assessments</span><small>{studio.assessments.length}{draftAssessmentCount ? ` · ${draftAssessmentCount} draft` : ""}</small></a>
+          <a class:list={{ active: activeSection === "resources" }} href={studioUrl("resources")}><span><i aria-hidden="true">◇</i> Resources</span><small>{studio.materials.length + studio.flashcardDecks.length}</small></a>
+          <a class:list={{ active: activeSection === "offerings" }} href={studioUrl("offerings")}><span><i aria-hidden="true">$</i> Price & enrolment</span><small>{studio.offerings.length}</small></a>
+          <a class:list={{ active: activeSection === "sessions" }} href={studioUrl("sessions")}><span><i aria-hidden="true">◷</i> Schedule</span><small>{studio.sessions.length}</small></a>
+          <a class:list={{ active: activeSection === "learners" }} href={studioUrl("learners")}><span><i aria-hidden="true">♙</i> Learners</span><small>{invitations.length}</small></a>
+          <a class:list={{ active: activeSection === "results" }} href={studioUrl("results")}><span><i aria-hidden="true">↗</i> Insights</span><small>{resultAttempts.length} attempts</small></a>
+          <a class:list={{ active: activeSection === "team" }} href={studioUrl("team")}><span><i aria-hidden="true">♚</i> Team</span><small>{team.filter((member) => member.status === "active").length}</small></a>
+          <a class:list={{ active: activeSection === "publish" }} href={studioUrl("publish")}><span><i aria-hidden="true">◎</i> Review & publish</span><small>{studio.course.status}</small></a>
         </nav>
       </> : <>
         <div class="studio-sidebar-heading"><span class="eyebrow">Creator Studio</span><h2>My Products</h2><p>{creatorProductCount} products across every format</p></div>
@@ -280,10 +281,9 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
             <div class="course-editor-topline">
               <div class="course-editor-identity"><ProductIcon name={studio.course.delivery_mode === "live" ? "online_course" : studio.course.delivery_mode === "hybrid" ? "in_person_course" : studio.course.delivery_mode === "self-paced" ? "video_course" : "course"} size="small" /><div><span class="eyebrow">Course · {studio.course.delivery_mode.replaceAll("-", " ")}</span><h2>{studio.course.title}</h2><div class="course-editor-meta"><span class:list={["studio-status", studio.course.status]}>{studio.course.status === "published" && studio.course.listing_status !== "listed" ? "unpublished" : studio.course.status}</span><span>Version {studio.course.content_version ?? 1}</span><span>{studio.course.subject}</span></div></div></div>
               <div class="studio-heading-actions">
-                <a class="button button-small button-secondary" href="/dashboard?workspace=creation&section=content">All products</a>
-                <a class="button button-small button-secondary" href={`/tutor/preview/${studio.course.id}`} target="_blank">Preview</a>
-                {studio.course.status === "published" && <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/copy`} method="post"><button class="button button-small button-secondary" type="submit">New version</button><p class="form-message"></p></form>}
-                <a class="button button-small" href={studioUrl("publish")}>Review & publish</a>
+                <a class="button button-small button-secondary" href="/dashboard?workspace=creation&section=content"><span aria-hidden="true">←</span> All products</a>
+                <a class="button button-small button-secondary" href={`/tutor/preview/${studio.course.id}`} target="_blank"><span aria-hidden="true">◉</span> Preview</a>
+                {studio.course.status === "published" && <form class="api-form" action={`/api/tutor/courses/${studio.course.id}/copy`} method="post"><button class="button button-small button-secondary" type="submit"><span aria-hidden="true">⧉</span> New version</button><p class="form-message"></p></form>}
               </div>
             </div>
             <nav class="course-editor-progress four-steps" aria-label="Course creation progress">
@@ -419,7 +419,7 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
             {Astro.url.searchParams.get("error") && <p class="form-error">{Astro.url.searchParams.get("error")}</p>}
             <section class:list={["google-session-connector", { connected: Boolean(googleIntegration) }]}>
               <div><strong>{googleIntegration ? "Google Calendar & Meet connected" : "Connect Google Calendar & Meet"}</strong><p>{googleIntegration ? `Connected as ${googleIntegration.google_email}. Online sessions create Meet links and invite enrolled learners.` : "Connect once to create Meet links and learner invitations automatically."}</p></div>
-              <a class:list={["button", "button-small", { "button-secondary": Boolean(googleIntegration) }]} href={`/api/integrations/google/start?next=${encodeURIComponent(studioUrl("sessions"))}`}>{googleIntegration ? "Reconnect" : "Connect Google"}</a>
+              <a class:list={["button", "button-small", { "button-secondary": Boolean(googleIntegration) }]} href={`/api/integrations/google/start?next=${encodeURIComponent(studioUrl("sessions"))}`}><span aria-hidden="true">G</span> {googleIntegration ? "Reconnect" : "Connect Google"}</a>
             </section>
             <form class="inline-form api-form" data-kind="session" action={`/api/tutor/offerings/${selectedOffering.id}/sessions`} method="post">
               <label>Session title<input name="title" required value={`Session ${selectedSessions.length + 1}`} /></label>
@@ -430,9 +430,9 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
               <input name="venueName" placeholder="Venue name (in person)" />
               <input name="venueAddress" placeholder="Venue address (in person)" />
               <input name="arrivalInstructions" placeholder="Arrival instructions" />
-              <button class="button button-small" type="submit" disabled={!googleIntegration && selectedOffering.delivery_mode !== "in_person"}>Add session</button><p class="form-message">{!googleIntegration && selectedOffering.delivery_mode !== "in_person" ? "Connect Google above before creating this online session." : "The session will be added without leaving this part of the course."}</p>
+              <button class="button button-small" type="submit" disabled={!googleIntegration && selectedOffering.delivery_mode !== "in_person"}><span aria-hidden="true">＋</span> Add session</button><p class="form-message">{!googleIntegration && selectedOffering.delivery_mode !== "in_person" ? "Connect Google above before creating this online session." : "The session will be added without leaving this part of the course."}</p>
             </form>
-            <div class="studio-items">{studio.sessions.filter((session) => session.course_offering_id === selectedOffering.id).map((session) => <section><h3>{session.title}</h3><small>{session.delivery_mode.replace("_", " ")} · {new Date(session.starts_at).toLocaleString("en-SG")}{session.instructor_name ? ` · ${session.instructor_name}` : ""}{session.venue_name ? ` · ${session.venue_name}` : ""}</small>{session.delivery_mode === "live_online" && <span class="studio-status complete">Google Meet created</span>}</section>)}</div>
+            <div class="studio-items">{studio.sessions.filter((session) => session.course_offering_id === selectedOffering.id).map((session) => { const editable = session.status === "scheduled" && Date.parse(session.ends_at) > Date.now() && (session.delivery_mode === "in_person" || Boolean(googleIntegration)); return <section class="studio-manageable-item"><div class="studio-item-summary"><h3>{session.title}</h3><small>{session.delivery_mode.replace("_", " ")} · {new Date(session.starts_at).toLocaleString("en-SG")}{session.instructor_name ? ` · ${session.instructor_name}` : ""}{session.venue_name ? ` · ${session.venue_name}` : ""}</small>{session.delivery_mode === "live_online" && session.status === "scheduled" && <span class="studio-status complete">Google Meet created</span>}{session.status !== "scheduled" && <span class="studio-status">{session.status}</span>}</div><div class="studio-item-actions"><details class="studio-inline-editor" open={Astro.url.searchParams.get("editSession") === session.id}><summary class:list={["button", "button-small", "button-secondary", { disabled: !editable }]} aria-disabled={!editable}><span aria-hidden="true">✎</span> Edit</summary>{editable && <form class="inline-form api-form" data-kind="session" data-method="PATCH" data-reload-after-patch="true" action={`/api/tutor/sessions/${session.id}`} method="post"><input type="hidden" name="deliveryMode" value={session.delivery_mode} /><label>Title<input name="title" required value={session.title} /></label><label>Starts<input name="startsAt" type="datetime-local" required value={formatSingaporeInput(new Date(session.starts_at))} /></label><label>Ends<input name="endsAt" type="datetime-local" required value={formatSingaporeInput(new Date(session.ends_at))} /></label><label>Capacity<input name="capacity" type="number" min="1" value={session.capacity ?? ""} /></label>{session.delivery_mode === "in_person" && <><label>Venue<input name="venueName" required value={session.venue_name ?? ""} /></label><label>Address<input name="venueAddress" required value={session.address_line_1 ?? ""} /></label><label>City<input name="city" value={session.city ?? "Singapore"} /></label><label>Arrival instructions<input name="arrivalInstructions" value={session.arrival_instructions ?? ""} /></label></>}<button class="button button-small" type="submit"><span aria-hidden="true">✓</span> Save changes</button><p class="form-message"></p></form>}</details><form class="api-form" data-method="DELETE" data-confirm={session.offering_status === "draft" ? "Delete this session and its Google Calendar event?" : "Cancel this published session and notify Google Calendar attendees?"} action={`/api/tutor/sessions/${session.id}`} method="post"><button class="button button-small button-danger" type="submit" disabled={!editable}><span aria-hidden="true">×</span> {session.offering_status === "draft" ? "Delete" : "Cancel"}</button><p class="form-message"></p></form></div>{!editable && <small class="disabled-action-note">Past, cancelled, or disconnected online sessions cannot be changed.</small>}</section>; })}</div>
           </article>}
 
           {activeSection === "curriculum" && <article class="panel">
@@ -440,12 +440,12 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
             <form class="inline-form api-form" action={`/api/tutor/courses/${studio.course.id}/modules`} method="post">
               <input type="hidden" name="offeringId" value={selectedOfferingId} />
               <input name="title" required placeholder="New module title" /><input name="position" type="number" min="1" value={studio.modules.length + 1} />
-              <button class="button button-small" type="submit">Add module</button><p class="form-message"></p>
+              <button class="button button-small" type="submit"><span aria-hidden="true">＋</span> Add module</button><p class="form-message"></p>
             </form>
             <div class="studio-items">
-              {studio.modules.map((module) => (
-                <section>
-                  <h3>{module.position}. {module.title}</h3>
+              {studio.modules.map((module) => { const locked = studio.offeringModules.some((assignment) => assignment.module_id === module.id && studio.offerings.some((offering) => offering.id === assignment.course_offering_id && offering.status === "published")); const lessonCount = studio.lessons.filter((lesson) => lesson.module_id === module.id).length; return (
+                <section class="studio-manageable-item">
+                  <div class="studio-item-heading"><h3>{module.position}. {module.title}</h3><div class="studio-item-actions"><details class="studio-inline-editor"><summary class:list={["button", "button-small", "button-secondary", { disabled: locked }]} aria-disabled={locked}><span aria-hidden="true">✎</span> Edit</summary>{!locked && <form class="inline-form api-form" data-kind="module" data-method="PATCH" data-reload-after-patch="true" action={`/api/tutor/modules/${module.id}`} method="post"><label>Module title<input name="title" required value={module.title} /></label><label>Position<input name="position" type="number" min="1" value={module.position} /></label><button class="button button-small" type="submit"><span aria-hidden="true">✓</span> Save</button><p class="form-message"></p></form>}</details><form class="api-form" data-method="DELETE" data-confirm={`Delete ${module.title}${lessonCount ? ` and its ${lessonCount} lesson${lessonCount === 1 ? "" : "s"}` : ""}? This cannot be undone.`} action={`/api/tutor/modules/${module.id}`} method="post"><button class="button button-small button-danger" type="submit" disabled={locked}><span aria-hidden="true">×</span> Delete</button><p class="form-message"></p></form></div></div>{locked && <small class="disabled-action-note">Published module locked. Create a new course version to edit or delete it.</small>}
                   <ul>{studio.lessons.filter((lesson) => lesson.module_id === module.id).map((lesson) => <li>{lesson.title} <small>{lesson.lesson_type}</small></li>)}</ul>
                   <form class="inline-form api-form" data-kind="lesson" action={`/api/tutor/modules/${module.id}/lessons`} method="post">
                     <input name="title" required placeholder="Lesson title" />
@@ -456,10 +456,10 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
                     <input name="videoUrl" type="url" placeholder="Direct HTTPS video URL (video lessons)" />
                     <input name="estimatedMinutes" type="number" min="1" placeholder="Minutes" />
                     <input name="position" type="number" min="1" value={studio.lessons.filter((lesson) => lesson.module_id === module.id).length + 1} />
-                    <button class="button button-small" type="submit">Add lesson</button><p class="form-message"></p>
+                    <button class="button button-small" type="submit"><span aria-hidden="true">＋</span> Add lesson</button><p class="form-message"></p>
                   </form>
                 </section>
-              ))}
+              ); })}
             </div>
           </article>}
 
@@ -691,8 +691,10 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
     .google-session-connector{margin:18px 0;padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:18px;border:1px solid #b9d1ee;border-radius:12px;background:#eff6ff}
     .google-session-connector.connected{border-color:#a8d4bb;background:#f0fbf4}
     .google-session-connector strong,.google-session-connector p{display:block}.google-session-connector p{margin:4px 0 0;color:var(--muted);font-size:10px;line-height:1.5}
+    .studio-module-nav a>span{display:flex;align-items:center;gap:8px}.studio-module-nav i{width:18px;text-align:center;font-style:normal;color:var(--accent)}
+    .studio-manageable-item{position:relative}.studio-item-heading,.studio-item-summary{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.studio-item-summary{flex:1;flex-direction:column;gap:4px}.studio-item-actions{display:flex;align-items:flex-start;justify-content:flex-end;gap:8px;flex-wrap:wrap}.studio-item-actions form{margin:0}.studio-inline-editor{position:relative}.studio-inline-editor>summary{list-style:none}.studio-inline-editor>summary::-webkit-details-marker{display:none}.studio-inline-editor>summary.disabled{pointer-events:none;opacity:.45}.studio-inline-editor[open]{width:100%}.studio-inline-editor[open]>form{margin-top:10px;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}.disabled-action-note{display:block;margin-top:8px;color:var(--muted)}
     @media(max-width:900px){.course-editor-progress.four-steps{grid-template-columns:repeat(4,minmax(105px,1fr))}}
-    @media(max-width:760px){.studio-main>.panel>.inline-form.offering-default-form{grid-template-columns:1fr}.offering-default-form>.offering-date-group{grid-column:auto}.google-session-connector{align-items:stretch;flex-direction:column}.google-session-connector .button{justify-content:center}}
+    @media(max-width:760px){.studio-main>.panel>.inline-form.offering-default-form{grid-template-columns:1fr}.offering-default-form>.offering-date-group{grid-column:auto}.google-session-connector{align-items:stretch;flex-direction:column}.google-session-connector .button{justify-content:center}.studio-item-heading,.studio-item-summary{flex-direction:column}.studio-item-actions{justify-content:flex-start}}
   </style>
   <script>
     document.querySelectorAll<HTMLFormElement>(".api-form").forEach((form) => {
@@ -811,7 +813,7 @@ const continueWorkflowSection = activeSection === "offerings" && studio?.course.
         const courseId = result.course?.id ?? result.offering?.courseId ?? currentUrl.searchParams.get("courseId");
         const offeringId = result.offering?.id ?? currentUrl.searchParams.get("offeringId");
         const nextSection = button?.dataset.nextSection;
-        if (method === "PATCH" && !nextSection) {
+        if (method === "PATCH" && !nextSection && form.dataset.reloadAfterPatch !== "true") {
           if (button) button.disabled = false;
           return;
         }
