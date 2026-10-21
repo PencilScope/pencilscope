@@ -260,7 +260,7 @@ try {
   await command("Network.setExtraHTTPHeaders", { headers: { "x-pencilscope-admin-email": "system-admin@e2e.invalid" } });
   await navigate(adminSite + "/");
   assert.match(await bodyText(), /System administration/i);
-  for (const view of ["overview", "users", "notifications", "courses", "orders", "settlements", "disputes", "sessions", "audit", "health"]) {
+  for (const view of ["overview", "activity", "users", "notifications", "courses", "orders", "settlements", "disputes", "sessions", "audit", "health"]) {
     await evaluate("document.querySelector('[data-view=\"" + view + "\"]').click()");
     if (!await viewSettled()) {
       issues.push("System administration " + view + " remains stuck on Loading.");

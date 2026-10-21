@@ -252,11 +252,22 @@ try {
   assert.equal(adminPage.status, 200);
   assert.match(adminPage.headers.get("cache-control") ?? "", /no-store/i);
   assert.ok(adminPage.headers.has("content-security-policy"));
-  for (const endpoint of ["overview", "enquiries", "users", "notifications", "courses", "orders", "settlements", "disputes", "sessions", "audit", "health"]) {
+  for (const endpoint of ["overview", "activity", "enquiries", "users", "notifications", "courses", "orders", "settlements", "disputes", "sessions", "audit", "health"]) {
     assert.equal((await request(origins.admin, `/api/admin/${endpoint}`, {
       headers: staff("system-admin@e2e.invalid")
     })).status, 200, endpoint);
   }
+  const liveActivity = await json(await request(origins.admin, "/api/admin/activity?period=today", {
+    headers: staff("system-admin@e2e.invalid")
+  }));
+  assert.equal(liveActivity.timezone, "Asia/Singapore");
+  assert.equal(liveActivity.period, "today");
+  assert.ok(Array.isArray(liveActivity.users));
+  assert.equal(typeof liveActivity.summary.serverErrors, "number");
+  const yesterdayActivity = await json(await request(origins.admin, "/api/admin/activity?period=yesterday", {
+    headers: staff("auditor@e2e.invalid")
+  }));
+  assert.equal(yesterdayActivity.period, "yesterday");
   const enquiries = await json(await request(origins.admin, "/api/admin/enquiries", {
     headers: staff("system-admin@e2e.invalid")
   }));

@@ -80,21 +80,163 @@ async function audit(env: Environment, actorId: string, action: string, entityId
   ).bind(crypto.randomUUID(), actorId, action, entityType, entityId, JSON.stringify(metadata), new Date().toISOString()).run();
 }
 
+const SINGAPORE_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+function activityWindow(period: string, now = new Date()) {
+  const singaporeNow = new Date(now.getTime() + SINGAPORE_OFFSET_MS);
+  const dayStart = Date.UTC(
+    singaporeNow.getUTCFullYear(), singaporeNow.getUTCMonth(), singaporeNow.getUTCDate()
+  ) - SINGAPORE_OFFSET_MS - (period === "yesterday" ? 86_400_000 : 0);
+  return {
+    period: period === "yesterday" ? "yesterday" : "today",
+    start: new Date(dayStart).toISOString(),
+    end: new Date(dayStart + 86_400_000).toISOString()
+  };
+}
+
+type ActivityUser = {
+  userId: string; name: string; role: string; countryCode: string | null; city: null;
+  lastActive: string; auditEvents: number; learningEvents: number; assessmentAttempts: number;
+  mcpCalls: number; rejectedActions: number; orders: number; activities: Set<string>;
+};
+
+async function activitySnapshot(env: Environment, requestedPeriod: string) {
+  const window = activityWindow(requestedPeriod);
+  const [auditRows, learningRows, attemptRows, mcpRows, orderRows, operational] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT u.id AS user_id, u.display_name, u.role, ap.country_code, a.action,
+        COUNT(*) AS event_count, MAX(a.created_at) AS last_at
+       FROM audit_logs a JOIN users u ON u.id = a.actor_user_id
+       LEFT JOIN account_profiles ap ON ap.user_id = u.id
+       WHERE a.created_at >= ? AND a.created_at < ?
+       GROUP BY u.id, u.display_name, u.role, ap.country_code, a.action`
+    ).bind(window.start, window.end),
+    env.DB.prepare(
+      `SELECT u.id AS user_id, u.display_name, u.role, ap.country_code, l.activity_type,
+        COUNT(*) AS event_count, MAX(l.created_at) AS last_at
+       FROM learning_product_activity l JOIN users u ON u.id = l.user_id
+       LEFT JOIN account_profiles ap ON ap.user_id = u.id
+       WHERE l.created_at >= ? AND l.created_at < ?
+       GROUP BY u.id, u.display_name, u.role, ap.country_code, l.activity_type`
+    ).bind(window.start, window.end),
+    env.DB.prepare(
+      `SELECT u.id AS user_id, u.display_name, u.role, ap.country_code,
+        COUNT(*) AS event_count, MAX(x.submitted_at) AS last_at
+       FROM learning_product_attempts x JOIN users u ON u.id = x.user_id
+       LEFT JOIN account_profiles ap ON ap.user_id = u.id
+       WHERE x.submitted_at >= ? AND x.submitted_at < ?
+       GROUP BY u.id, u.display_name, u.role, ap.country_code`
+    ).bind(window.start, window.end),
+    env.DB.prepare(
+      `SELECT u.id AS user_id, u.display_name, u.role, ap.country_code, m.tool_name,
+        m.succeeded, COUNT(*) AS event_count, MAX(m.created_at) AS last_at
+       FROM mcp_tool_calls m JOIN users u ON u.id = m.user_id
+       LEFT JOIN account_profiles ap ON ap.user_id = u.id
+       WHERE m.created_at >= ? AND m.created_at < ?
+       GROUP BY u.id, u.display_name, u.role, ap.country_code, m.tool_name, m.succeeded`
+    ).bind(window.start, window.end),
+    env.DB.prepare(
+      `SELECT u.id AS user_id, u.display_name, u.role, ap.country_code, o.status,
+        COUNT(*) AS event_count, MAX(o.created_at) AS last_at
+       FROM orders o JOIN users u ON u.id = o.student_user_id
+       LEFT JOIN account_profiles ap ON ap.user_id = u.id
+       WHERE o.created_at >= ? AND o.created_at < ?
+       GROUP BY u.id, u.display_name, u.role, ap.country_code, o.status`
+    ).bind(window.start, window.end),
+    env.DB.prepare(
+      `SELECT
+        (SELECT COUNT(*) FROM users WHERE created_at >= ? AND created_at < ?) AS new_users,
+        (SELECT COUNT(*) FROM webhook_events WHERE status = 'failed' AND received_at >= ? AND received_at < ?) AS failed_webhooks,
+        (SELECT COUNT(*) FROM orders WHERE status = 'failed' AND updated_at >= ? AND updated_at < ?) AS failed_orders,
+        (SELECT COUNT(*) FROM settlement_transfers WHERE status = 'failed' AND updated_at >= ? AND updated_at < ?) AS failed_settlements,
+        (SELECT COUNT(*) FROM creator_earnings WHERE last_error IS NOT NULL AND updated_at >= ? AND updated_at < ?) AS earning_errors`
+    ).bind(
+      window.start, window.end, window.start, window.end, window.start, window.end,
+      window.start, window.end, window.start, window.end
+    )
+  ]);
+  const users = new Map<string, ActivityUser>();
+  const ensureUser = (row: Record<string, unknown>) => {
+    const userId = String(row.user_id);
+    let user = users.get(userId);
+    if (!user) {
+      user = {
+        userId, name: String(row.display_name), role: String(row.role),
+        countryCode: row.country_code ? String(row.country_code) : null, city: null,
+        lastActive: String(row.last_at), auditEvents: 0, learningEvents: 0,
+        assessmentAttempts: 0, mcpCalls: 0, rejectedActions: 0, orders: 0,
+        activities: new Set<string>()
+      };
+      users.set(userId, user);
+    }
+    if (String(row.last_at) > user.lastActive) user.lastActive = String(row.last_at);
+    return user;
+  };
+  let signedIns = 0;
+  for (const row of auditRows.results as Record<string, unknown>[]) {
+    const user = ensureUser(row); const count = Number(row.event_count);
+    user.auditEvents += count; user.activities.add(String(row.action));
+    if (row.action === "session.signed_in") signedIns += count;
+  }
+  for (const row of learningRows.results as Record<string, unknown>[]) {
+    const user = ensureUser(row); const count = Number(row.event_count);
+    user.learningEvents += count; user.activities.add(`learning.${String(row.activity_type)}`);
+  }
+  for (const row of attemptRows.results as Record<string, unknown>[]) {
+    const user = ensureUser(row); const count = Number(row.event_count);
+    user.assessmentAttempts += count; user.activities.add("assessment.submitted");
+  }
+  for (const row of mcpRows.results as Record<string, unknown>[]) {
+    const user = ensureUser(row); const count = Number(row.event_count);
+    user.mcpCalls += count; user.activities.add(`ai.${String(row.tool_name)}`);
+    if (!Number(row.succeeded)) user.rejectedActions += count;
+  }
+  for (const row of orderRows.results as Record<string, unknown>[]) {
+    const user = ensureUser(row); const count = Number(row.event_count);
+    user.orders += count; user.activities.add(`order.${String(row.status)}`);
+  }
+  const failure = (operational.results[0] ?? {}) as Record<string, unknown>;
+  const serverErrors = Number(failure.failed_webhooks ?? 0) + Number(failure.failed_orders ?? 0)
+    + Number(failure.failed_settlements ?? 0) + Number(failure.earning_errors ?? 0);
+  return {
+    period: window.period, timezone: "Asia/Singapore", periodStart: window.start, periodEnd: window.end,
+    generatedAt: new Date().toISOString(),
+    summary: {
+      activeUsers: users.size, signedIns, newUsers: Number(failure.new_users ?? 0),
+      recordedEvents: [...users.values()].reduce((sum, user) => sum + user.auditEvents + user.learningEvents + user.assessmentAttempts + user.mcpCalls + user.orders, 0),
+      serverErrors, rejectedActions: [...users.values()].reduce((sum, user) => sum + user.rejectedActions, 0)
+    },
+    errors: {
+      failedWebhooks: Number(failure.failed_webhooks ?? 0), failedOrders: Number(failure.failed_orders ?? 0),
+      failedSettlements: Number(failure.failed_settlements ?? 0), earningErrors: Number(failure.earning_errors ?? 0)
+    },
+    users: [...users.values()].sort((a, b) => b.lastActive.localeCompare(a.lastActive)).map((user) => ({
+      ...user, activities: [...user.activities]
+    })),
+    locationCoverage: "Country is profile-provided. City and region are not collected or inferred from IP addresses."
+  };
+}
+
 function adminShell(name: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
   <title>PencilScope System Administration</title><style>
-  :root{font-family:system-ui,sans-serif;color:#102a56;background:#eef6ff}*{box-sizing:border-box}body{margin:0}header{padding:20px 28px;display:flex;align-items:center;justify-content:space-between;color:#fff;background:#081f42}header strong{font-size:20px}nav{padding:12px 28px;display:flex;gap:8px;flex-wrap:wrap;background:#fff;border-bottom:1px solid #d7e2f0}nav button{padding:9px 13px;border:0;border-radius:8px;background:#eef6ff;color:#102a56;font-weight:700;cursor:pointer}main{width:min(1240px,calc(100% - 32px));margin:28px auto}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.metric,.panel{padding:20px;border:1px solid #d7e2f0;border-radius:13px;background:#fff}.metric strong{display:block;font-size:30px}.metric span{color:#53677f;font-size:12px}.panel{margin-top:20px;overflow:auto}.panel h2{margin:0 0 14px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:11px;text-align:left;border-bottom:1px solid #d7e2f0;vertical-align:top}th{color:#53677f;font-size:10px;text-transform:uppercase}button.action{padding:7px 10px;border:1px solid #315ea8;border-radius:7px;background:#fff;color:#102a56;cursor:pointer}.danger{border-color:#b44;color:#822}.status{padding:4px 7px;border-radius:99px;background:#eef6ff;font-size:10px}.error{padding:14px;color:#822;background:#ffe9e5;border-radius:10px}.notice{padding:14px;color:#174a36;background:#e8f7ef;border-radius:10px}.composer{display:grid;grid-template-columns:1fr 1fr;gap:16px}.composer label{display:grid;gap:6px;color:#53677f;font-size:12px;font-weight:700}.composer .wide{grid-column:1/-1}.composer input,.composer select,.composer textarea{width:100%;padding:11px;border:1px solid #b9c9dc;border-radius:8px;background:#fff;color:#102a56;font:inherit}.composer textarea{min-height:110px;resize:vertical}.composer button{padding:12px 18px;justify-self:start;border:0;border-radius:8px;color:#fff;background:#1d4ed8;font-weight:700;cursor:pointer}.composer small{font-weight:400}.audience-summary{padding:10px;border-radius:8px;background:#eef6ff}.toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.toolbar select{padding:9px;border:1px solid #b9c9dc;border-radius:8px;background:#fff}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.detail-grid div,.message-card{padding:13px;border-radius:9px;background:#f6f9fd}.detail-grid small{display:block;color:#53677f}.message-card{margin-top:12px;white-space:pre-wrap}.detail-actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}.notes{display:grid;gap:8px}.note{padding:10px;border-left:3px solid #315ea8;background:#f6f9fd}.priority-critical{color:#9b1c1c}.priority-warning{color:#8a5a00}@media(max-width:800px){.metrics{grid-template-columns:1fr 1fr}.composer{grid-template-columns:1fr}.composer .wide{grid-column:auto}}
+  :root{font-family:system-ui,sans-serif;color:#102a56;background:#eef6ff}*{box-sizing:border-box}body{margin:0}header{padding:20px 28px;display:flex;align-items:center;justify-content:space-between;color:#fff;background:#081f42}header strong{font-size:20px}nav{padding:12px 28px;display:flex;gap:8px;flex-wrap:wrap;background:#fff;border-bottom:1px solid #d7e2f0}nav button{padding:9px 13px;border:0;border-radius:8px;background:#eef6ff;color:#102a56;font-weight:700;cursor:pointer}main{width:min(1240px,calc(100% - 32px));margin:28px auto}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}.metric,.panel{padding:20px;border:1px solid #d7e2f0;border-radius:13px;background:#fff}.metric strong{display:block;font-size:30px}.metric span{color:#53677f;font-size:12px}.panel{margin-top:20px;overflow:auto}.panel h2{margin:0 0 14px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:11px;text-align:left;border-bottom:1px solid #d7e2f0;vertical-align:top}th{color:#53677f;font-size:10px;text-transform:uppercase}button.action{padding:7px 10px;border:1px solid #315ea8;border-radius:7px;background:#fff;color:#102a56;cursor:pointer}.danger{border-color:#b44;color:#822}.status{padding:4px 7px;border-radius:99px;background:#eef6ff;font-size:10px}.error{padding:14px;color:#822;background:#ffe9e5;border-radius:10px}.notice{padding:14px;color:#174a36;background:#e8f7ef;border-radius:10px}.composer{display:grid;grid-template-columns:1fr 1fr;gap:16px}.composer label{display:grid;gap:6px;color:#53677f;font-size:12px;font-weight:700}.composer .wide{grid-column:1/-1}.composer input,.composer select,.composer textarea{width:100%;padding:11px;border:1px solid #b9c9dc;border-radius:8px;background:#fff;color:#102a56;font:inherit}.composer textarea{min-height:110px;resize:vertical}.composer button{padding:12px 18px;justify-self:start;border:0;border-radius:8px;color:#fff;background:#1d4ed8;font-weight:700;cursor:pointer}.composer small{font-weight:400}.audience-summary{padding:10px;border-radius:8px;background:#eef6ff}.toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}.toolbar select{padding:9px;border:1px solid #b9c9dc;border-radius:8px;background:#fff}.detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.detail-grid div,.message-card{padding:13px;border-radius:9px;background:#f6f9fd}.detail-grid small{display:block;color:#53677f}.message-card{margin-top:12px;white-space:pre-wrap}.detail-actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}.notes{display:grid;gap:8px}.note{padding:10px;border-left:3px solid #315ea8;background:#f6f9fd}.priority-critical{color:#9b1c1c}.priority-warning{color:#8a5a00}.live-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.live-title{display:flex;align-items:center;gap:9px}.live-dot{width:9px;height:9px;border-radius:50%;background:#16a36a;box-shadow:0 0 0 4px #dff7ec}.period-actions{display:flex;gap:7px}.period-actions button.active{color:#fff;background:#1d4ed8}.activity-note{color:#53677f;font-size:12px}.activity-list{display:flex;gap:5px;flex-wrap:wrap}.activity-list span{padding:3px 7px;border-radius:99px;background:#eef6ff;font-size:10px}.metric.alert strong{color:#a33}@media(max-width:800px){.metrics{grid-template-columns:1fr 1fr}.composer{grid-template-columns:1fr}.composer .wide{grid-column:auto}}
   </style></head><body><header><strong>PencilScope · System Administration</strong><span>${name}</span></header>
-  <nav><button data-view="overview">Overview</button><button data-view="enquiries">Enquiries</button><button data-view="users">Users</button><button data-view="notifications">Notifications</button><button data-view="courses">Courses</button><button data-view="orders">Bookings & payments</button><button data-view="settlements">Creator settlements</button><button data-view="disputes">Disputes</button><button data-view="sessions">Active sessions</button><button data-view="audit">Audit log</button><button data-view="health">Service status</button></nav>
+  <nav><button data-view="overview">Overview</button><button data-view="activity">Live activity</button><button data-view="enquiries">Enquiries</button><button data-view="users">Users</button><button data-view="notifications">Notifications</button><button data-view="courses">Courses</button><button data-view="orders">Bookings & payments</button><button data-view="settlements">Creator settlements</button><button data-view="disputes">Disputes</button><button data-view="sessions">Active sessions</button><button data-view="audit">Audit log</button><button data-view="health">Service status</button></nav>
   <main><div id="content">Loading…</div></main><script>
   const out=document.querySelector('#content');
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const money=(v,c)=>new Intl.NumberFormat('en-SG',{style:'currency',currency:c||'SGD'}).format(Number(v||0)/100);
   const table=(cols,rows)=>'<div class="panel"><table><thead><tr>'+cols.map(c=>'<th>'+esc(c[0])+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+cols.map(c=>'<td>'+c[1](r)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div>';
+  const countries=new Intl.DisplayNames(['en'],{type:'region'});
+  const activityLabel=value=>{const labels={'session.signed_in':'Signed in','session.signed_out':'Signed out','course.created':'Created course','preferences.language_updated':'Changed language','assessment.submitted':'Submitted assessment','order.paid':'Paid purchase','order.failed':'Failed purchase'};return labels[value]||String(value).replace(/^ai\./,'AI · ').replace(/^learning\./,'Learning · ').replaceAll('_',' ').replaceAll('.',' · ')};
+  const activityPanel=(d,compact=false)=>'<section class="panel"><div class="live-heading"><div><div class="live-title"><span class="live-dot"></span><h2>'+esc(d.period==='yesterday'?'Yesterday’s user activity':'Live user activity')+'</h2></div><p class="activity-note">Singapore time · refreshed '+esc(new Date(d.generatedAt).toLocaleString('en-SG',{timeZone:'Asia/Singapore'}))+'</p></div>'+(compact?'<button class="action" data-view="activity">Open live dashboard</button>':'<div class="period-actions"><button class="action '+(d.period==='today'?'active':'')+'" data-activity-period="today">Today</button><button class="action '+(d.period==='yesterday'?'active':'')+'" data-activity-period="yesterday">Yesterday</button><button class="action" data-activity-refresh>Refresh</button></div>')+'</div><div class="metrics"><div class="metric"><strong>'+esc(d.summary.activeUsers)+'</strong><span>Active users</span></div><div class="metric"><strong>'+esc(d.summary.signedIns)+'</strong><span>Sign-ins</span></div><div class="metric"><strong>'+esc(d.summary.recordedEvents)+'</strong><span>Recorded activities</span></div><div class="metric '+(d.summary.serverErrors?'alert':'')+'"><strong>'+esc(d.summary.serverErrors)+'</strong><span>Server errors</span></div><div class="metric"><strong>'+esc(d.summary.rejectedActions)+'</strong><span>Rejected user / AI actions</span></div></div>'+(d.users.length?table([['User',r=>'<strong>'+esc(r.name)+'</strong><br><small>'+esc(r.role)+'</small>'],['Location',r=>esc(r.countryCode?(countries.of(r.countryCode)||r.countryCode):'Not provided')+'<br><small>City not collected</small>'],['Last activity',r=>esc(new Date(r.lastActive).toLocaleString('en-SG',{timeZone:'Asia/Singapore'}))],['Activity',r=>'<div class="activity-list">'+r.activities.map(a=>'<span>'+esc(activityLabel(a))+'</span>').join('')+'</div>'],['Totals',r=>esc(r.auditEvents+r.learningEvents+r.assessmentAttempts+r.mcpCalls+r.orders)+(r.rejectedActions?'<br><small>'+esc(r.rejectedActions)+' rejected</small>':'')]],d.users):'<p class="activity-note">No signed-in activity was recorded for this period.</p>')+'<p class="activity-note">'+esc(d.locationCoverage)+'</p></section>';
   async function api(path,options){const r=await fetch('/api/admin/'+path,options);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Request failed');return j}
   async function showEnquiry(id){out.textContent='Loading enquiry…';try{const d=await api('enquiries/'+encodeURIComponent(id)),r=d.enquiry,p=r.payload||{},c=p.contact||{},q=p.enquiry||{},country=c.country||{},phone=c.phone||{};let actions='';if(d.canManage&&r.status==='deleted'&&!r.purged_at)actions='<button class="action" data-enquiry-restore="'+esc(r.id)+'">Restore enquiry</button>';if(d.canManage&&r.status!=='deleted')actions=['new','in_progress','resolved','spam','deleted'].filter(s=>s!==r.status).map(s=>'<button class="action '+(s==='deleted'?'danger':'')+'" data-enquiry-status="'+esc(s)+'" data-enquiry-id="'+esc(r.id)+'">'+esc(s.replaceAll('_',' '))+'</button>').join(' ');out.innerHTML='<button class="action" data-view="enquiries">← Back to enquiries</button><div class="panel"><h1>'+esc(r.reference_code)+'</h1><div class="detail-grid"><div><small>Name</small><strong>'+esc(c.name)+'</strong></div><div><small>Status</small><span class="status">'+esc(r.status.replaceAll('_',' '))+'</span></div><div><small>Country</small>'+esc(country.name)+' ('+esc(country.code)+')</div><div><small>Contact number</small>'+esc(phone.e164)+'</div><div><small>Type</small>'+esc(q.type?.replaceAll('_',' '))+'</div><div><small>Received</small>'+esc(p.submittedAt)+'</div><div><small>Source page</small>'+esc(p.sourcePath)+'</div><div><small>Recovery until</small>'+esc(r.recoverable_until||'—')+'</div></div><div class="message-card"><strong>Message</strong><br>'+esc(q.message)+'</div><div class="detail-actions">'+actions+'</div><h2>Activity notes</h2><div class="notes">'+(d.notes.length?d.notes.map(n=>'<div class="note">'+esc(n.body)+'<br><small>'+esc(n.author_name||'System')+' · '+esc(n.created_at)+'</small></div>').join(''):'<p>No activity notes yet.</p>')+'</div></div>';}catch(e){out.innerHTML='<p class="error">'+esc(e.message)+'</p>'}}
-  async function load(view='overview'){out.textContent='Loading…';try{const d=await api(view);
-    if(view==='overview')out.innerHTML='<div class="metrics">'+[['Users',d.users],['Courses',d.courses],['Paid bookings',d.paidOrders],['Active learners',d.activeLearners],['New enquiries',d.newEnquiries],['Active sessions',d.activeSessions]].map(x=>'<div class="metric"><strong>'+esc(x[1])+'</strong><span>'+esc(x[0])+'</span></div>').join('')+'</div>';
+  let currentView='overview',activityPeriod='today';
+  async function load(view='overview'){currentView=view.split('?')[0];out.textContent='Loading…';try{const d=await api(view);
+    if(view==='overview'){const activity=await api('activity?period=today');out.innerHTML='<div class="metrics">'+[['Users',d.users],['Courses',d.courses],['Paid bookings',d.paidOrders],['Active learners',d.activeLearners],['New enquiries',d.newEnquiries],['Active sessions',d.activeSessions]].map(x=>'<div class="metric"><strong>'+esc(x[1])+'</strong><span>'+esc(x[0])+'</span></div>').join('')+'</div>'+activityPanel(activity,true)}
+    if(view.startsWith('activity')){activityPeriod=d.period;out.innerHTML=activityPanel(d)}
     if(view.startsWith('enquiries')){out.innerHTML='<div class="toolbar"><h1>Contact enquiries</h1><label>Status <select data-enquiry-filter><option value="">Open enquiries</option><option value="new">New</option><option value="in_progress">In progress</option><option value="resolved">Resolved</option><option value="spam">Spam</option><option value="deleted">Deleted / recoverable</option></select></label></div>'+table([['Reference',r=>'<strong>'+esc(r.reference_code)+'</strong><br><small>'+esc(r.created_at)+'</small>'],['Contact',r=>esc(r.display_name)+'<br><small>'+esc(r.country_name)+' · ••••'+esc(r.phone_last4)+'</small>'],['Type',r=>esc(r.enquiry_type.replaceAll('_',' '))],['Status',r=>'<span class="status">'+esc(r.status.replaceAll('_',' '))+'</span>'],['Source',r=>esc(r.source_path)],['Action',r=>'<button class="action" data-enquiry="'+esc(r.id)+'">View</button>']],d.enquiries);out.querySelector('[data-enquiry-filter]').value=d.status||''}
     if(view==='users')out.innerHTML='<h1>Users</h1>'+table([['User',r=>'<strong>'+esc(r.display_name)+'</strong><br><small>'+esc(r.email)+'</small>'],['Role',r=>esc(r.role)],['Status',r=>'<span class="status">'+esc(r.status)+'</span>'],['Last login',r=>esc(r.last_login_at||'Never')],['Sessions',r=>esc(r.active_sessions)],['Action',r=>r.status==='active'?'<button class="action danger" data-user="'+esc(r.id)+'" data-status="suspended">Deactivate</button>':'<button class="action" data-user="'+esc(r.id)+'" data-status="active">Activate</button>']],d.users);
     if(view==='notifications')out.innerHTML='<h1>System notifications</h1><p>Send an in-app announcement to every active user or a selected audience. Only system administrators can publish.</p><form class="panel composer" id="notification-composer"><label>Title<input name="title" required minlength="2" maxlength="120" placeholder="Scheduled maintenance"></label><label>Priority<select name="priority"><option value="info">Information</option><option value="important">Important</option><option value="warning">Warning</option><option value="critical">Critical</option></select></label><label class="wide">Message<textarea name="body" required minlength="2" maxlength="2000" placeholder="Write a clear, concise update."></textarea></label><label>Category<select name="category"><option value="system">System</option><option value="learning">Learning</option><option value="creator">Creator</option><option value="billing">Billing</option><option value="security">Security</option></select></label><label>Audience<select name="audienceType" id="notification-audience"><option value="all">All active users</option><option value="learners">Active learners</option><option value="creators">Content creators</option><option value="specific_users">Specific users by email</option><option value="country">Users in a country</option><option value="interest">Users with an interest</option></select></label><label class="wide" id="audience-value-label">Audience value<textarea name="audienceValue" maxlength="10000" placeholder="Only required for email, country or interest targeting"></textarea><small id="audience-help">No value is needed when sending to all active users.</small></label><label>Action label<input name="actionLabel" maxlength="40" placeholder="View details"></label><label>Action URL<input name="actionUrl" maxlength="500" placeholder="/dashboard"><small>Use a PencilScope path beginning with /.</small></label><label>Expires at<input name="expiresAt" type="datetime-local"></label><div class="wide audience-summary">The recipient count will be validated before publication. Sending creates an immutable, audited campaign.</div><button type="submit">Publish notification</button><p id="notification-result"></p></form><h2>Campaign history</h2>'+table([['Notification',r=>'<strong>'+esc(r.title)+'</strong><br><small>'+esc(r.category)+' · '+esc(r.audience_type)+'</small>'],['Priority',r=>'<span class="priority-'+esc(r.priority)+'">'+esc(r.priority)+'</span>'],['Recipients',r=>esc(r.recipient_count)],['Read',r=>esc(r.read_count)],['Clicked',r=>esc(r.clicked_count)],['Published',r=>esc(r.published_at)]],d.campaigns);
@@ -107,6 +249,8 @@ function adminShell(name: string): string {
     if(view==='health')out.innerHTML='<h1>Service status</h1><div class="metrics"><div class="metric"><strong>'+esc(d.core.status)+'</strong><span>Core API</span></div><div class="metric"><strong>'+esc(d.database)+'</strong><span>Database</span></div><div class="metric"><strong>'+esc(d.failedWebhooks)+'</strong><span>Failed webhooks</span></div><div class="metric"><strong>'+esc(d.lastWebhook||'—')+'</strong><span>Last webhook</span></div></div>';
   }catch(e){out.innerHTML='<p class="error">'+esc(e.message)+'</p>'}}
   document.addEventListener('click',e=>{const b=e.target.closest('[data-view]');if(b)load(b.dataset.view)});
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-activity-period]');if(b)load('activity?period='+encodeURIComponent(b.dataset.activityPeriod))});
+  document.addEventListener('click',e=>{if(e.target.closest('[data-activity-refresh]'))load('activity?period='+encodeURIComponent(activityPeriod))});
   document.addEventListener('click',e=>{const b=e.target.closest('[data-enquiry]');if(b)showEnquiry(b.dataset.enquiry)});
   document.addEventListener('change',e=>{if(e.target.matches('[data-enquiry-filter]'))load('enquiries'+(e.target.value?'?status='+encodeURIComponent(e.target.value):''))});
   document.addEventListener('click',async e=>{const b=e.target.closest('[data-enquiry-status]');if(!b)return;const status=b.dataset.enquiryStatus;if(status==='deleted'&&!confirm('Delete this enquiry? It can be restored for seven days.'))return;const note=prompt('Add an activity note for this change:');if(!note)return;await api('enquiries/'+encodeURIComponent(b.dataset.enquiryId)+'/status',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({status,note})});status==='deleted'?load('enquiries'):showEnquiry(b.dataset.enquiryId)});
@@ -115,6 +259,7 @@ function adminShell(name: string): string {
   document.addEventListener('click',async e=>{const b=e.target.closest('[data-case]');if(!b)return;const note=prompt('Resolution note (recorded in the audit log):');if(!note)return;await api('disputes/'+encodeURIComponent(b.dataset.case)+'/status',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({status:b.dataset.caseStatus,note})});load('disputes')});
   document.addEventListener('change',e=>{if(e.target.id!=='notification-audience')return;const help=document.querySelector('#audience-help');const hints={all:'No value is needed when sending to all active users.',learners:'No value is needed. Active course and product learners are included.',creators:'No value is needed. Users with saved courses or learning products are included.',specific_users:'Enter email addresses separated by commas, spaces or new lines.',country:'Enter a two-letter country code such as SG.',interest:'Enter the interest category ID shown in the course category records.'};if(help)help.textContent=hints[e.target.value]||''});
   document.addEventListener('submit',async e=>{if(e.target.id!=='notification-composer')return;e.preventDefault();const form=e.target,button=form.querySelector('button[type="submit"]'),result=form.querySelector('#notification-result'),values=Object.fromEntries(new FormData(form));if(values.audienceType==='all'&&!confirm('Send this notification to every active user?'))return;button.disabled=true;result.className='';result.textContent='Publishing…';try{if(values.expiresAt)values.expiresAt=new Date(values.expiresAt).toISOString();const response=await api('notifications',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(values)});result.className='notice';result.textContent='Published to '+response.campaign.recipientCount+' users.';setTimeout(()=>load('notifications'),900)}catch(error){result.className='error';result.textContent=error.message}finally{button.disabled=false}});
+  setInterval(()=>{if(currentView==='activity')load('activity?period='+encodeURIComponent(activityPeriod));else if(currentView==='overview')load('overview')},60_000);
   load();</script></body></html>`;
 }
 
@@ -128,6 +273,9 @@ export default {
     if (!url.pathname.startsWith("/api/admin/")) return json({ error: "Not found." }, 404);
     const route = url.pathname.slice("/api/admin/".length);
 
+    if (request.method === "GET" && route === "activity") {
+      return json(await activitySnapshot(env, url.searchParams.get("period") ?? "today"));
+    }
     if (request.method === "GET" && route === "overview") {
       const [users, courses, paidOrders, learners, sessions, newEnquiries] = await env.DB.batch([
         env.DB.prepare("SELECT COUNT(*) AS total FROM users"),
